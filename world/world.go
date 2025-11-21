@@ -8,7 +8,6 @@ import (
 	"example.com/mud/parser"
 	"example.com/mud/parser/commands"
 	"example.com/mud/world/entities"
-	"example.com/mud/world/entities/components"
 	"example.com/mud/world/player"
 	"example.com/mud/world/scheduler"
 )
@@ -30,6 +29,37 @@ func NewWorld(entityMap map[string]*entities.Entity, startingRoom string) *World
 	}
 }
 
+func (w *World) Init() error {
+	for _, e := range w.entityMap {
+		err := w.initEntityAndChildren(e)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (w *World) initEntityAndChildren(e *entities.Entity) error {
+	if e.InitFunc != nil {
+		e.InitFunc(&entities.Event{
+			Type:         "init",
+			Publisher:    w,
+			Scheduler:    w.GetScheduler(),
+			EntitiesById: w.entityMap,
+			Room:         e.Parent,
+			Source:       e,
+		})
+	}
+
+	for _, children := range e.GetChildren() {
+		for _, child := range children {
+			w.initEntityAndChildren(child)
+		}
+	}
+
+	return nil
+}
+
 func (w *World) EntitiesById() map[string]*entities.Entity { return w.entityMap }
 
 func (w *World) AddPlayer(name string, inbox chan string) (*player.Player, error) {
@@ -43,23 +73,24 @@ func (w *World) AddPlayer(name string, inbox chan string) (*player.Player, error
 		return nil, fmt.Errorf("could not create player '%s': %w", name, err)
 	}
 
-	if room, ok := entities.GetComponent[*components.Room](newPlayer.CurrentRoom); ok {
-		room.AddChild(newPlayer.Entity)
-	}
+	// if room, ok := entities.GetComponent[*components.Room](newPlayer.CurrentRoom); ok {
+	// 	room.AddChild(newPlayer.Entity)
+	// }
 
-	w.bus.Subscribe(newPlayer.CurrentRoom, newPlayer.Entity, inbox)
-	w.Publish(newPlayer.CurrentRoom, fmt.Sprintf("%s enters the room.", newPlayer.Name), []*entities.Entity{newPlayer.Entity})
+	w.bus.Subscribe(startingRoom, newPlayer.Entity, inbox)
+	w.Publish(startingRoom, fmt.Sprintf("%s enters the room.", newPlayer.Name), []*entities.Entity{newPlayer.Entity})
 
 	return newPlayer, nil
 }
 
 func (w *World) DisconnectPlayer(p *player.Player) {
-	if room, ok := entities.GetComponent[*components.Room](p.CurrentRoom); ok {
-		room.RemoveChild(p.Entity)
-	}
+	// TODO
+	// if room, ok := entities.GetComponent[*components.Room](p.Entity.Parent); ok {
+	// 	room.RemoveChild(p.Entity)
+	// }
 
-	w.bus.Unsubscribe(p.CurrentRoom, p.Entity)
-	w.Publish(p.CurrentRoom, fmt.Sprintf("%s leaves the room.", p.Name), []*entities.Entity{p.Entity})
+	w.bus.Unsubscribe(p.Entity.Parent, p.Entity)
+	w.Publish(p.Entity.Parent, fmt.Sprintf("%s leaves the room.", p.Name), []*entities.Entity{p.Entity})
 }
 
 func (w *World) GetEntityById(id string) (*entities.Entity, bool) {
@@ -71,8 +102,12 @@ func (w *World) Publish(room *entities.Entity, text string, exclude []*entities.
 	w.bus.Publish(room, text, exclude)
 }
 
-func (w *World) PublishTo(room *entities.Entity, recipient *entities.Entity, text string) {
-	w.bus.PublishTo(room, recipient, text)
+func (w *World) PublishTo(recipient *entities.Entity, text string) {
+	w.bus.PublishTo(recipient, text)
+}
+
+func (w *World) Move(toRoom *entities.Entity, player *entities.Entity) {
+	w.bus.Move(toRoom, player)
 }
 
 func (w *World) GetScheduler() *scheduler.Scheduler {
@@ -80,6 +115,7 @@ func (w *World) GetScheduler() *scheduler.Scheduler {
 }
 
 func (w *World) Parse(p *player.Player, line string) (string, error) {
+	// TODO append to errors rather than just returning them
 	cmd := parser.Parse(line)
 	if cmd == nil {
 		return "What in the nine hells?", nil
@@ -88,16 +124,10 @@ func (w *World) Parse(p *player.Player, line string) (string, error) {
 	switch cmd.Kind {
 	case "help":
 		return w.HelpMessage(cmd.Params["command"]), nil
-	case "move":
-		return p.Move(cmd.Params["direction"])
 	case "look":
 		return p.Look(cmd.Params["target"])
 	case "inventory":
 		return p.Inventory()
-	case "map":
-		return p.Map()
-	case "track":
-		return p.Track(cmd.Params["target"])
 	}
 
 	// see if it has target
@@ -114,13 +144,8 @@ func (w *World) Parse(p *player.Player, line string) (string, error) {
 		}
 	}
 
-	// see if it has a message
-	if message := cmd.Params["message"]; message != "" {
-		response, err := p.ActMessage(cmd.Kind, message, cmd.NoMatchMessage)
-		return response, err
-	}
-
-	return "What the hell are you talking about?", nil
+	response, err := p.Act(cmd.Kind, cmd.Params, cmd.NoMatchMessage)
+	return response, err
 }
 
 func (w *World) HelpMessage(command string) string {
@@ -168,38 +193,4 @@ func (w *World) HelpGeneral() string {
 	}
 
 	return b.String()
-}
-
-func (w *World) MovePlayer(p *player.Player, direction string) (string, error) {
-	playerRoom, err := entities.RequireComponent[*components.Room](p.CurrentRoom)
-	if err != nil {
-		return "", fmt.Errorf("move for player '%s': %w", p.Name, err)
-	}
-
-	newRoom := w.getNeighboringRoom(playerRoom, direction)
-	if newRoom != nil {
-		w.Publish(p.CurrentRoom, fmt.Sprintf("%s leaves the room.", p.Name), []*entities.Entity{p.Entity})
-
-		playerRoom.RemoveChild(p.Entity)
-		p.CurrentRoom = newRoom
-
-		if room, ok := entities.GetComponent[*components.Room](p.CurrentRoom); ok {
-			room.AddChild(p.Entity)
-		}
-
-		w.bus.Move(p.CurrentRoom, p.Entity)
-		w.Publish(p.CurrentRoom, fmt.Sprintf("%s enters the room.", p.Name), []*entities.Entity{p.Entity})
-
-		return p.GetRoomDescription()
-	}
-
-	return "You can't go there.", nil
-}
-
-func (w *World) getNeighboringRoom(r *components.Room, direction string) *entities.Entity {
-	if roomId, ok := r.GetNeighboringRoomId(direction); ok {
-		room := w.entityMap[roomId]
-		return room
-	}
-	return nil
 }

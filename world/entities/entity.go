@@ -2,43 +2,48 @@ package entities
 
 import (
 	"fmt"
-	"reflect"
+	"maps"
 	"strings"
 	"sync"
 
-	"example.com/mud/models"
-	"example.com/mud/utils"
+	"github.com/google/uuid"
 )
 
+type ReactionFunc func(*Event)
 type Entity struct {
-	mu         sync.RWMutex
-	components map[reflect.Type]Component
+	mu        sync.RWMutex
+	reactions map[string]map[EventRole]ReactionFunc
+	children  map[string]IChildren
 
+	Id          string
 	Name        string
 	Description string
 	Aliases     []string
 	Tags        []string
-	Fields      map[string]models.Value
-	Parent      ComponentWithChildren
+	Fields      map[string]any
+	InitFunc    ReactionFunc
+	Parent      *Entity
 }
 
-func NewEntity(name, description string, aliases []string, tags []string, fields map[string]models.Value, parent ComponentWithChildren) *Entity {
+func NewEntity(name, description string, aliases []string, tags []string, fields map[string]any, initFunc ReactionFunc, parent *Entity) *Entity {
 	return &Entity{
-		components:  map[reflect.Type]Component{},
+		reactions: map[string]map[EventRole]ReactionFunc{},
+		children:  map[string]IChildren{},
+
+		Id:          uuid.NewString(),
 		Name:        name,
 		Description: description,
 		Aliases:     aliases,
 		Tags:        tags,
 		Fields:      fields,
+		InitFunc:    initFunc,
 		Parent:      parent,
 	}
 }
 
-func (e *Entity) Copy(parent ComponentWithChildren) *Entity {
-	fieldsCopy := make(map[string]models.Value, len(e.Fields))
-	for k, v := range e.Fields {
-		fieldsCopy[k] = v
-	}
+func (e *Entity) Copy(parent *Entity) *Entity {
+	fieldsCopy := make(map[string]any, len(e.Fields))
+	maps.Copy(fieldsCopy, e.Fields)
 
 	aliasesCopy := append([]string(nil), e.Aliases...)
 	tagsCopy := append([]string(nil), e.Tags...)
@@ -49,180 +54,173 @@ func (e *Entity) Copy(parent ComponentWithChildren) *Entity {
 		aliasesCopy,
 		tagsCopy,
 		fieldsCopy,
+		e.InitFunc,
 		parent,
 	)
 
-	for _, c := range e.components {
-		newEntity.Add(c.Copy())
-	}
+	maps.Copy(newEntity.reactions, e.reactions)
+
 	return newEntity
 }
 
-func (e *Entity) GetField(fieldName string) models.Value {
-	switch fieldName {
-	case "name":
-		return models.VStr(e.Name)
-	case "description":
-		return models.VStr(e.Description)
+func (e *Entity) SetField(path string, value any) error {
+	if e == nil || path == "" {
+		return fmt.Errorf("entity set field: path cannot be empty")
 	}
 
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.Fields == nil {
+		e.Fields = make(map[string]any)
+	}
+
+	parts := strings.Split(path, ".")
+	m := e.Fields
+
+	// walk through nested maps
+	for i := 0; i < len(parts)-1; i++ {
+		key := parts[i]
+
+		next, ok := m[key]
+		if !ok {
+			nm := make(map[string]any)
+			m[key] = nm
+			m = nm
+			continue
+		}
+
+		nm, ok := next.(map[string]any)
+		if !ok {
+			// stomp over existing non-map field
+			nm = make(map[string]any)
+			m[key] = nm
+		}
+
+		m = nm
+	}
+
+	last := parts[len(parts)-1]
+	m[last] = value
+
+	return nil
+}
+
+func (e *Entity) GetField(fieldName string) any {
 	return e.Fields[fieldName]
 }
 
-func (e *Entity) SetField(fieldName string, v models.Value) error {
-	switch fieldName {
-	case "name":
-		if v.K != models.KindString {
-			return fmt.Errorf("could not set %s name to non-string value", e.Name)
-		}
-		e.Name = v.S
-	case "description":
-		if v.K != models.KindString {
-			return fmt.Errorf("could not set %s description to non-string value", e.Name)
-		}
-		e.Description = v.S
-	case "aliases":
-		if v.K != models.KindStringList {
-			return fmt.Errorf("could not set %s aliases to non-string-list value", e.Name)
-		}
-		err := e.setAliases(v.SL)
-		if err != nil {
-			return fmt.Errorf("set field: %w", err)
-		}
-	case "tags":
-		if v.K != models.KindStringList {
-			return fmt.Errorf("could not set %s tags to non-string-list value", e.Name)
-		}
-		e.Tags = v.SL
-	default:
-		e.Fields[fieldName] = v
-	}
-
-	return nil
-}
-
 func (e *Entity) setAliases(aliases []string) error {
-	e.Aliases = aliases
+	// TODO
+	// e.Aliases = aliases
 
-	// entities are indexed by aliases for performance reasons, so we need to reindex
-	err := e.Parent.GetChildren().ReindexAliasesForEntity(e)
-	if err != nil {
-		return fmt.Errorf("error setting aliases for entity '%s': %w", e.Name, err)
+	// // entities are indexed by aliases for performance reasons, so we need to reindex
+	// err := e.Parent.GetChildren().ReindexAliasesForEntity(e)
+	// if err != nil {
+	// 	return fmt.Errorf("error setting aliases for entity '%s': %w", e.Name, err)
+	// }
+
+	// return nil
+	return nil
+}
+
+func (e *Entity) AddReaction(kind string, role EventRole, r ReactionFunc) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.reactions[kind] == nil {
+		e.reactions[kind] = map[EventRole]ReactionFunc{}
 	}
+	e.reactions[kind][role] = r
+}
+
+func (e *Entity) GetReaction(kind string, role EventRole) (ReactionFunc, bool) {
+	r, ok := e.reactions[kind][role]
+	return r, ok
+}
+
+func (e *Entity) AddChild(group string, child *Entity) error {
+	if e.children[group] == nil {
+		e.children[group] = NewChildren()
+	}
+
+	err := e.children[group].AddChild(child)
+	if err != nil {
+		return fmt.Errorf("could not add '%s' group child: %w", group, err)
+	}
+
+	child.Parent = e
 
 	return nil
 }
 
-func (e *Entity) Add(c Component) *Entity {
-	e.mu.Lock()
-	e.components[reflect.TypeOf(c)] = c
-	e.mu.Unlock()
-	return e
-}
+func (e *Entity) GetChildren() map[string][]*Entity {
+	out := map[string][]*Entity{}
 
-func (e *Entity) GetComponentWithChildren(ct ComponentType) (ComponentWithChildren, bool) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
+	for group, groupChildren := range e.children {
+		groupEntities := []*Entity{}
+		groupEntities = append(groupEntities, groupChildren.GetChildren()...)
 
-	for _, c := range e.components {
-		id := c.Id()
-		if cwc, ok := any(c).(ComponentWithChildren); ok {
-			if id == ct {
-				return cwc, true
-			}
-		}
+		out[group] = groupEntities
 	}
 
-	return nil, false
+	return out
 }
 
-func (e *Entity) RequireComponentWithChildren(ct ComponentType) (ComponentWithChildren, error) {
-	c, ok := e.GetComponentWithChildren(ct)
+func (e *Entity) GetChildrenByAlias(alias string) []AmbiguityOption {
+	eMatches := make([]AmbiguityOption, 0, 10)
 
-	if !ok {
-		return nil, fmt.Errorf("entity does not have component with children %s", ct.String())
+	for _, children := range e.children {
+		eMatches = append(
+			eMatches,
+			children.GetChildrenByAlias(alias)...,
+		)
 	}
 
-	return c, nil
-}
-
-func (e *Entity) GetComponentsWithChildren() []ComponentWithChildren {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-
-	components := make([]ComponentWithChildren, 0, len(e.components))
-
-	for _, c := range e.components {
-		if cwc, ok := any(c).(ComponentWithChildren); ok {
-			components = append(components, cwc)
-		}
-	}
-
-	return components
+	return eMatches
 }
 
 func (e *Entity) GetDescription() (string, error) {
-	var b strings.Builder
+	// var b strings.Builder
 
-	formatted, err := utils.FormatText(e.Description, map[string]string{})
-	if err != nil {
-		return "", fmt.Errorf("could not format description for entity '%s': %w", e.Name, err)
-	}
+	// formatted, err := utils.FormatText(e.Description, map[string]string{})
+	// if err != nil {
+	// 	return "", fmt.Errorf("could not format description for entity '%s': %w", e.Name, err)
+	// }
 
-	b.WriteString(fmt.Sprintf("- %s", formatted))
+	// b.WriteString(fmt.Sprintf("- %s", formatted))
 
-	for _, cwc := range e.GetComponentsWithChildren() {
-		if !cwc.GetChildren().GetRevealed() {
-			continue
-		}
+	// for _, cwc := range e.GetComponentsWithChildren() {
+	// 	if !cwc.GetChildren().GetRevealed() {
+	// 		continue
+	// 	}
 
-		children := cwc.GetChildren().GetChildren()
-		if len(children) == 0 {
-			continue
-		}
+	// 	children := cwc.GetChildren().GetChildren()
+	// 	if len(children) == 0 {
+	// 		continue
+	// 	}
 
-		var childB strings.Builder
-		childB.WriteString("\n")
+	// 	var childB strings.Builder
+	// 	childB.WriteString("\n")
 
-		childB.WriteString(fmt.Sprintf("%s%s:", models.Tab, cwc.GetChildren().GetPrefix()))
-		childB.WriteString(" (\n")
+	// 	childB.WriteString(fmt.Sprintf("%s%s:", models.Tab, cwc.GetChildren().GetPrefix()))
+	// 	childB.WriteString(" (\n")
 
-		for _, child := range children {
-			cDescription, err := child.GetDescription()
-			if err != nil {
-				return "", fmt.Errorf("could not format description for entity '%s': %w", child.Name, err)
-			}
+	// 	for _, child := range children {
+	// 		cDescription, err := child.GetDescription()
+	// 		if err != nil {
+	// 			return "", fmt.Errorf("could not format description for entity '%s': %w", child.Name, err)
+	// 		}
 
-			childB.WriteString(fmt.Sprintf("%s%s%s", models.Tab, models.Tab, cDescription))
-			childB.WriteString("\n")
-		}
+	// 		childB.WriteString(fmt.Sprintf("%s%s%s", models.Tab, models.Tab, cDescription))
+	// 		childB.WriteString("\n")
+	// 	}
 
-		b.WriteString(childB.String())
+	// 	b.WriteString(childB.String())
 
-		b.WriteString(fmt.Sprintf("%s)", models.Tab))
-	}
+	// 	b.WriteString(fmt.Sprintf("%s)", models.Tab))
+	// }
 
-	return b.String(), nil
-}
-
-func GetComponent[C Component](e *Entity) (C, bool) {
-	var zero C
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	v, ok := e.components[reflect.TypeOf((*C)(nil)).Elem()]
-	if !ok {
-		return zero, false
-	}
-	return v.(C), true
-}
-
-func RequireComponent[C Component](e *Entity) (C, error) {
-	c, ok := GetComponent[C](e)
-
-	if ok {
-		return c, nil
-	}
-
-	var zero C
-	return zero, fmt.Errorf("entity does not have component %s", zero.Id().String())
+	// return b.String(), nil
+	return "", nil
 }

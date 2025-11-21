@@ -101,10 +101,14 @@ func (b *Bus) Publish(room *entities.Entity, text string, exclude []*entities.En
 	}
 }
 
-func (b *Bus) PublishTo(room *entities.Entity, recipient *entities.Entity, text string) {
+func (b *Bus) PublishTo(recipient *entities.Entity, text string) {
 	b.mu.RLock()
+
+	// get room that player is subscribed to, and send the message
+	room := b.playerRooms[recipient]
 	subscribers := b.roomSubscribers[room]
 	inbox := subscribers[recipient]
+
 	b.mu.RUnlock()
 
 	select {

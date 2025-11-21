@@ -8,20 +8,16 @@ import (
 	"sync"
 	"time"
 
-	"example.com/mud/models"
-	"example.com/mud/utils"
 	"example.com/mud/world/entities"
-	"example.com/mud/world/entities/components"
 	"example.com/mud/world/scheduler"
 )
 
 var safeNameRegex = regexp.MustCompile(`[^a-zA-Z]+`)
 
 type Player struct {
-	Name        string
-	Entity      *entities.Entity
-	CurrentRoom *entities.Entity
-	Pending     *entities.PendingAction
+	Name    string
+	Entity  *entities.Entity
+	Pending *entities.PendingAction
 
 	mu            sync.Mutex
 	nextActionAt  time.Time
@@ -32,40 +28,41 @@ type Player struct {
 type World interface {
 	EntitiesById() map[string]*entities.Entity
 	GetEntityById(id string) (*entities.Entity, bool)
-	MovePlayer(p *Player, direction string) (string, error)
 
 	Publish(room *entities.Entity, text string, exclude []*entities.Entity)
-	PublishTo(room *entities.Entity, recipient *entities.Entity, text string)
+	PublishTo(recipient *entities.Entity, text string)
+	Move(toRoom *entities.Entity, player *entities.Entity)
 
 	GetScheduler() *scheduler.Scheduler
 }
 
-func NewPlayer(name string, world World, currentRoom *entities.Entity) (*Player, error) {
-	playerTemplate, ok := world.GetEntityById("Player")
+func NewPlayer(name string, world World, parentRoom *entities.Entity) (*Player, error) {
+	playerTemplate, ok := world.GetEntityById("player")
 	if !ok {
 		return nil, fmt.Errorf("entity with ID 'Player' does not exist in world")
 	}
 
-	playerEntity := playerTemplate.Copy(nil)
+	playerEntity := playerTemplate.Copy(parentRoom)
 	playerEntity.Name = name
 	playerEntity.Description = fmt.Sprintf("%s the brave hero is here.", name)
 	playerEntity.Aliases = []string{strings.ToLower(name)}
 
 	return &Player{
-		Name:        name,
-		Entity:      playerEntity,
-		CurrentRoom: currentRoom,
-		world:       world,
+		Name:   name,
+		Entity: playerEntity,
+		world:  world,
 	}, nil
 }
 
-func (p *Player) OpeningMessage() (string, error) {
-	message, err := p.GetRoomDescription()
-	if err != nil {
-		return "", fmt.Errorf("opening message for player '%s': %w", p.Name, err)
-	}
-
-	return message, nil
+func (p *Player) Init() {
+	p.Entity.InitFunc(&entities.Event{
+		Type:         "init",
+		Publisher:    p.world,
+		Scheduler:    p.world.GetScheduler(),
+		EntitiesById: p.world.EntitiesById(),
+		Room:         p.Entity.Parent,
+		Source:       p.Entity,
+	})
 }
 
 func NameValidation(name string) string {
@@ -101,47 +98,44 @@ func (p *Player) StartCooldown(d time.Duration) {
 }
 
 func (p *Player) GetRoomDescription() (string, error) {
-	var b strings.Builder
+	// var b strings.Builder
 
-	room, err := entities.RequireComponent[*components.Room](p.CurrentRoom)
-	if err != nil {
-		return "", err
-	}
+	// room, err := entities.RequireComponent[*components.Room](p.CurrentRoom)
+	// if err != nil {
+	// 	return "", err
+	// }
 
-	formattedTitle, err := utils.FormatText(fmt.Sprintf("{'%s' | bold | red}", p.CurrentRoom.Name), map[string]string{})
-	if err != nil {
-		return "", fmt.Errorf("could not format room '%s' name: %w", p.CurrentRoom.Name, err)
-	}
+	// formattedTitle, err := utils.FormatText(fmt.Sprintf("{'%s' | bold | red}", p.CurrentRoom.Name), map[string]string{})
+	// if err != nil {
+	// 	return "", fmt.Errorf("could not format room '%s' name: %w", p.CurrentRoom.Name, err)
+	// }
 
-	b.WriteString(formattedTitle)
-	b.WriteString("\n")
+	// b.WriteString(formattedTitle)
+	// b.WriteString("\n")
 
-	roomDescription := strings.TrimSpace(p.CurrentRoom.Description)
-	b.WriteString(roomDescription)
-	b.WriteString("\n")
+	// roomDescription := strings.TrimSpace(p.CurrentRoom.Description)
+	// b.WriteString(roomDescription)
+	// b.WriteString("\n")
 
-	for _, e := range room.GetChildren().GetChildren() {
-		if e == p.Entity {
-			continue
-		}
+	// for _, e := range room.GetChildren().GetChildren() {
+	// 	if e == p.Entity {
+	// 		continue
+	// 	}
 
-		description, err := e.GetDescription()
-		if err != nil {
-			return "", err
-		}
+	// 	description, err := e.GetDescription()
+	// 	if err != nil {
+	// 		return "", err
+	// 	}
 
-		b.WriteString(fmt.Sprintf("%s%s", models.Tab, description))
-		b.WriteString("\n")
-	}
+	// 	b.WriteString(fmt.Sprintf("%s%s", models.Tab, description))
+	// 	b.WriteString("\n")
+	// }
 
-	b.WriteString("\n")
-	b.WriteString(room.GetExitText())
-	return b.String(), nil
-}
+	// b.WriteString("\n")
+	// b.WriteString(room.GetExitText())
+	// return b.String(), nil
 
-func (p *Player) Move(direction string) (string, error) {
-	message, err := p.world.MovePlayer(p, direction)
-	return message, err
+	return p.Entity.Parent.Description, nil
 }
 
 func (p *Player) Look(alias string) (string, error) {
@@ -185,25 +179,26 @@ func (p *Player) Look(alias string) (string, error) {
 }
 
 func (p *Player) Inventory() (string, error) {
-	if inventory, ok := entities.GetComponent[*components.Inventory](p.Entity); ok {
-		message, err := inventory.Print()
-		if err != nil {
-			return "", fmt.Errorf("inventory print for player '%s': %w", p.Name, err)
-		}
-		return message, nil
-	}
-	return "You couldn't possibly carry anything at all.", nil
+	// if inventory, ok := entities.GetComponent[*components.Inventory](p.Entity); ok {
+	// 	message, err := inventory.Print()
+	// 	if err != nil {
+	// 		return "", fmt.Errorf("inventory print for player '%s': %w", p.Name, err)
+	// 	}
+	// 	return message, nil
+	// }
+	// return "You couldn't possibly carry anything at all.", nil
+	return "", nil
 }
 
-func (p *Player) ActMessage(action, message, noMatchMessage string) (string, error) {
-	return p.sendEventToEntity(p.Entity, &entities.Event{
-		Type:         action,
-		Publisher:    p.world,
-		Scheduler:    p.world.GetScheduler(),
-		EntitiesById: p.world.EntitiesById(),
-		Room:         p.CurrentRoom,
-		Source:       p.Entity,
-		Message:      message,
+func (p *Player) Act(action string, parameters map[string]string, noMatchMessage string) (string, error) {
+	return p.sendEventToEntities(&entities.Event{
+		Type:              action,
+		Publisher:         p.world,
+		Scheduler:         p.world.GetScheduler(),
+		EntitiesById:      p.world.EntitiesById(),
+		CommandParameters: parameters,
+		Room:              p.Entity.Parent,
+		Source:            p.Entity,
 	}, noMatchMessage)
 }
 
@@ -237,12 +232,12 @@ func (p *Player) ActUponAlias(action, targetAlias, noMatchMessage string) (strin
 }
 
 func (p *Player) actUponEntity(action string, target *entities.Entity, noMatchMessage string) (string, error) {
-	return p.sendEventToEntity(target, &entities.Event{
+	return p.sendEventToEntities(&entities.Event{
 		Type:         action,
 		Publisher:    p.world,
 		Scheduler:    p.world.GetScheduler(),
 		EntitiesById: p.world.EntitiesById(),
-		Room:         p.CurrentRoom,
+		Room:         p.Entity.Parent,
 		Source:       p.Entity,
 		Target:       target,
 	}, noMatchMessage)
@@ -278,15 +273,15 @@ func (p *Player) ActUponMessageAlias(action, targetAlias, message, noMatchMessag
 }
 
 func (p *Player) actUponMessageEntity(action string, target *entities.Entity, message, noMatchMessage string) (string, error) {
-	return p.sendEventToEntity(target, &entities.Event{
+	return p.sendEventToEntities(&entities.Event{
 		Type:         action,
 		Publisher:    p.world,
 		Scheduler:    p.world.GetScheduler(),
 		EntitiesById: p.world.EntitiesById(),
-		Room:         p.CurrentRoom,
-		Source:       p.Entity,
-		Target:       target,
-		Message:      message,
+		// TODO add command parameters
+		Room:   p.Entity.Parent,
+		Source: p.Entity,
+		Target: target,
 	}, noMatchMessage)
 }
 
@@ -350,70 +345,74 @@ func (p *Player) ActUponWithAlias(action, targetAlias, instrumentAlias, noMatchM
 }
 
 func (p *Player) actUponWithEntities(action string, target, instrument *entities.Entity, noMatchMessage string) (string, error) {
-	return p.sendEventToEntity(target, &entities.Event{
+	return p.sendEventToEntities(&entities.Event{
 		Type:         action,
 		Publisher:    p.world,
 		Scheduler:    p.world.GetScheduler(),
 		EntitiesById: p.world.EntitiesById(),
-		Room:         p.CurrentRoom,
+		Room:         p.Entity.Parent,
 		Source:       p.Entity,
 		Instrument:   instrument,
 		Target:       target,
 	}, noMatchMessage)
 }
 
-func (p *Player) sendEventToEntity(entity *entities.Entity, event *entities.Event, noMatchMessage string) (string, error) {
-	if entity == nil {
-		return "", fmt.Errorf("player '%s' send event nil entity", p.Name)
+func (p *Player) sendEventToEntities(event *entities.Event, noMatchMessage string) (string, error) {
+	match := false
+
+	if source := event.Source; source != nil {
+		sourceMatch := p.sendEventToEntity(source, entities.EventRoleSource, event)
+		match = match || sourceMatch
 	}
 
-	if eventful, ok := entities.GetComponent[*components.Eventful](entity); ok {
+	if instrument := event.Instrument; instrument != nil {
+		sourceMatch := p.sendEventToEntity(instrument, entities.EventRoleInstrument, event)
+		match = match || sourceMatch
+	}
 
-		match, err := eventful.OnEvent(event)
-		if err != nil {
-			return "", fmt.Errorf("player '%s' send event to '%s' on event error: %w", p.Name, entity.Name, err)
-		}
+	if target := event.Target; target != nil {
+		sourceMatch := p.sendEventToEntity(target, entities.EventRoleTarget, event)
+		match = match || sourceMatch
+	}
 
-		if match {
-			return "", nil
-		}
+	if match {
+		return "", nil
 	}
 
 	message, err := entities.FormatEventMessage(noMatchMessage, event)
 	if err != nil {
-		return "", fmt.Errorf("player '%s' send event to '%s' no match format: %w", p.Name, entity.Name, err)
+		return "", fmt.Errorf("player '%s' send event to '%s' no match format: %w", p.Name, p.Entity.Name, err)
 	}
 
 	return message, nil
 }
 
+func (p *Player) sendEventToEntity(entity *entities.Entity, role entities.EventRole, event *entities.Event) bool {
+	reaction, ok := entity.GetReaction(event.Type, role)
+	if !ok {
+		return false
+	}
+
+	reaction(event)
+	return true
+}
+
 func (p *Player) getEntitiesByAlias(alias string) ([]entities.AmbiguityOption, error) {
 	eMatches := make([]entities.AmbiguityOption, 0, 10)
+	room := p.Entity.Parent
 
 	// check if the room itself has a matching alias
-	if slices.Contains(p.CurrentRoom.Aliases, alias) {
+	if slices.Contains(room.Aliases, alias) {
 		eMatches = append(eMatches, entities.AmbiguityOption{
-			Text:   fmt.Sprintf("The room: %s", p.CurrentRoom.Name),
-			Entity: p.CurrentRoom,
+			Text:   fmt.Sprintf("The room: %s", p.Entity.Parent.Name),
+			Entity: p.Entity.Parent,
 		})
 	}
 
-	// look for matches in the room
-	room, err := entities.RequireComponent[*components.Room](p.CurrentRoom)
-	if err != nil {
-		return nil, fmt.Errorf("getEntityByAlias for player '%s': %w", p.Name, err)
-	} else {
-		if cMatches := room.GetChildren().GetChildrenByAlias(alias); len(cMatches) > 0 {
-			eMatches = append(eMatches, cMatches...)
-		}
-	}
-
-	// look for matches in the player's inventory
-	if inventory, ok := entities.GetComponent[*components.Inventory](p.Entity); ok {
-		if iMatches := inventory.GetChildren().GetChildrenByAlias(alias); len(iMatches) > 0 {
-			eMatches = append(eMatches, iMatches...)
-		}
-	}
+	eMatches = append(
+		eMatches,
+		room.GetChildrenByAlias(alias)...,
+	)
 
 	return eMatches, nil
 }
