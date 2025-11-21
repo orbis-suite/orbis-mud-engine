@@ -37,7 +37,7 @@ func RegisterBuiltInCommands() error {
 		&helpCommand,
 		&inventoryCommand,
 		&lookCommand,
-		&moveCommand,
+		// &moveCommand,
 		&mapCommand,
 		&trackCommand,
 	})
