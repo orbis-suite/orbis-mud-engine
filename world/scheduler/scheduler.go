@@ -2,14 +2,13 @@ package scheduler
 
 import (
 	"container/heap"
-	"fmt"
 	"sync"
 	"time"
 )
 
 type Job struct {
 	NextRun time.Time
-	RunFunc func() error
+	RunFunc func()
 }
 
 type Scheduler struct {
@@ -73,10 +72,7 @@ func (s *Scheduler) run() {
 		next = heap.Pop(&s.jobs).(*Job)
 		s.mu.Unlock()
 
-		err := next.RunFunc()
-		if err != nil {
-			fmt.Println(err)
-		}
+		go next.RunFunc()
 	}
 }
 
