@@ -2,30 +2,41 @@ package player
 
 import (
 	"fmt"
-	"strings"
 
-	"example.com/mud/models"
 	"example.com/mud/world/entities"
 	"example.com/mud/world/entities/components"
+	"example.com/mud/world/response"
 )
 
-func (p *Player) Map() (string, error) {
+// sgrToHex maps the SGR color names used by room entities to web hex codes.
+var sgrToHex = map[string]string{
+	"black":   "#1c1a24",
+	"red":     "#ff5555",
+	"green":   "#55ff55",
+	"yellow":  "#ffff55",
+	"blue":    "#5555ff",
+	"magenta": "#ff55ff",
+	"cyan":    "#55ffff",
+	"white":   "#ffffff",
+}
+
+func (p *Player) Map() (response.MapView, error) {
 	coordByRoom, err := assignCoordinates(p.CurrentRoom, p.world, 5)
 	if err != nil {
-		return "", fmt.Errorf("map: assign coordinates: %w", err)
+		return response.MapView{}, fmt.Errorf("map: assign coordinates: %w", err)
 	}
 
 	currentRoom, err := entities.RequireComponent[*components.Room](p.CurrentRoom)
 	if err != nil {
-		return "", fmt.Errorf("cannot map non-room area: %w", err)
+		return response.MapView{}, fmt.Errorf("cannot map non-room area: %w", err)
 	}
 
-	ascii, err := p.renderMap(coordByRoom, currentRoom, p.world)
+	grid, playerX, playerY, err := p.renderMap(coordByRoom, currentRoom, p.world)
 	if err != nil {
-		return "", fmt.Errorf("map: render map: %w", err)
+		return response.MapView{}, fmt.Errorf("map: render map: %w", err)
 	}
 
-	return ascii, nil
+	return response.MapView{Grid: grid, PlayerX: playerX, PlayerY: playerY}, nil
 }
 
 type coord struct{ X, Y int }
@@ -115,60 +126,65 @@ func assignCoordinates(start *entities.Entity, world World, maxDepth int) (map[*
 	return coordByRoom, nil
 }
 
-func (p *Player) renderMap(coordByRoom map[*components.Room]coord, currentRoom *components.Room, world World) (string, error) {
+func (p *Player) renderMap(coordByRoom map[*components.Room]coord, currentRoom *components.Room, world World) ([][]response.MapCell, int, int, error) {
 	if len(coordByRoom) == 0 {
-		return "", nil
+		return nil, 0, 0, nil
 	}
 
 	minX, maxX, minY, maxY := 0, 0, 0, 0
-	for _, p := range coordByRoom {
-		if p.X < minX {
-			minX = p.X
+	for _, c := range coordByRoom {
+		if c.X < minX {
+			minX = c.X
 		}
-		if p.X > maxX {
-			maxX = p.X
+		if c.X > maxX {
+			maxX = c.X
 		}
-		if p.Y < minY {
-			minY = p.Y
+		if c.Y < minY {
+			minY = c.Y
 		}
-		if p.Y > maxY {
-			maxY = p.Y
+		if c.Y > maxY {
+			maxY = c.Y
 		}
 	}
 
 	width := (maxX-minX)*2 + 1
 	height := (maxY-minY)*2 + 1
-	grid := make([][]string, height)
+	grid := make([][]response.MapCell, height)
 	for i := range grid {
-		grid[i] = make([]string, width)
+		grid[i] = make([]response.MapCell, width)
 		for j := range grid[i] {
-			grid[i][j] = " "
+			grid[i][j] = response.MapCell{Color: "", Icon: " "}
 		}
 	}
+
+	var playerX, playerY int
 
 	for r, c := range coordByRoom {
 		gx := (c.X - minX) * 2
 		gy := (c.Y - minY) * 2
 
 		if r == currentRoom {
-			grid[gy][gx] = fmt.Sprintf("%s%s%s", models.SGR["red"], "@", models.SGR["reset"])
-		} else if len(r.GetChildren().GetChildrenByAlias(p.trackingAlias)) > 0 {
-			grid[gy][gx] = fmt.Sprintf("%s%s%s", models.SGR["yellow"], "!", models.SGR["reset"])
+			grid[gy][gx] = response.MapCell{Color: "#ff5555", Icon: "@"}
+			playerX, playerY = gx, gy
+		} else if p.trackingAlias != "" && len(r.GetChildren().GetChildrenByAlias(p.trackingAlias)) > 0 {
+			grid[gy][gx] = response.MapCell{Color: "#ffff55", Icon: "!"}
 		} else {
-			color := models.SGR[r.MapColor]
-			icon := r.MapIcon
-			grid[gy][gx] = fmt.Sprintf("%s%s%s", color, icon, models.SGR["reset"])
+			color := sgrToHex[r.MapColor]
+			if color == "" {
+				color = "#c8c4d0"
+			}
+			grid[gy][gx] = response.MapCell{Color: color, Icon: r.MapIcon}
 		}
 
 		for _, roomId := range r.Exits {
 			roomEntity, ok := world.GetEntityById(roomId)
 			if !ok {
-				return "", fmt.Errorf("entity with id '%s' does not exist", roomId)
+				return nil, 0, 0, fmt.Errorf("entity with id '%s' does not exist", roomId)
 			}
 
 			room, err := entities.RequireComponent[*components.Room](roomEntity)
 			if err != nil {
-				return "", fmt.Errorf("render map: %w", err)
+				return nil, 0, 0, fmt.Errorf("render map: %w", err)
 			}
 
 			npos, ok := coordByRoom[room]
@@ -178,28 +194,17 @@ func (p *Player) renderMap(coordByRoom map[*components.Room]coord, currentRoom *
 			dx := npos.X - c.X
 			dy := npos.Y - c.Y
 			if dx == 1 {
-				grid[gy][gx+1] = "-"
+				grid[gy][gx+1] = response.MapCell{Color: "#6b5f80", Icon: "-"}
 			} else if dx == -1 {
-				grid[gy][gx-1] = "-"
+				grid[gy][gx-1] = response.MapCell{Color: "#6b5f80", Icon: "-"}
 			} else if dy == 1 {
-				grid[gy+1][gx] = "|"
+				grid[gy+1][gx] = response.MapCell{Color: "#6b5f80", Icon: "|"}
 			} else if dy == -1 {
-				grid[gy-1][gx] = "|"
+				grid[gy-1][gx] = response.MapCell{Color: "#6b5f80", Icon: "|"}
 			}
 		}
 	}
 
-	var b strings.Builder
-	b.Grow(height * (width + 1))
-	for _, row := range grid {
-		b.WriteString(strings.Join(row, ""))
-		b.WriteByte('\n')
-	}
-	return b.String(), nil
+	return grid, playerX, playerY, nil
 }
 
-func (p *Player) Track(alias string) (string, error) {
-	p.trackingAlias = alias
-
-	return fmt.Sprintf(`Rooms with "%s" will now appear as "!" on your map.`, alias), nil
-}

@@ -10,6 +10,7 @@ import (
 type Config struct {
 	StartingRoom    string `yaml:"startingRoom"`
 	PlayerRateLimit int    `yaml:"playerRateLimit"`
+	WebSocketPort   int    `yaml:"websocketPort"`
 }
 
 func Load(path string) (*Config, error) {

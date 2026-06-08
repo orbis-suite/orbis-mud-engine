@@ -12,6 +12,7 @@ import (
 	"example.com/mud/utils"
 	"example.com/mud/world/entities"
 	"example.com/mud/world/entities/components"
+	"example.com/mud/world/response"
 	"example.com/mud/world/scheduler"
 )
 
@@ -32,7 +33,7 @@ type Player struct {
 type World interface {
 	EntitiesById() map[string]*entities.Entity
 	GetEntityById(id string) (*entities.Entity, bool)
-	MovePlayer(p *Player, direction string) (string, error)
+	MovePlayer(p *Player, direction string) (response.Response, error)
 
 	Publish(room *entities.Entity, text string, exclude []*entities.Entity)
 	PublishTo(room *entities.Entity, recipient *entities.Entity, text string)
@@ -59,13 +60,12 @@ func NewPlayer(name string, world World, currentRoom *entities.Entity) (*Player,
 	}, nil
 }
 
-func (p *Player) OpeningMessage() (string, error) {
-	message, err := p.GetRoomDescription()
+func (p *Player) OpeningMessage() (response.RoomDescription, error) {
+	room, err := p.GetRoomDescription()
 	if err != nil {
-		return "", fmt.Errorf("opening message for player '%s': %w", p.Name, err)
+		return response.RoomDescription{}, fmt.Errorf("opening message for player '%s': %w", p.Name, err)
 	}
-
-	return message, nil
+	return room, nil
 }
 
 func NameValidation(name string) string {
@@ -100,69 +100,64 @@ func (p *Player) StartCooldown(d time.Duration) {
 	p.mu.Unlock()
 }
 
-func (p *Player) GetRoomDescription() (string, error) {
-	var b strings.Builder
-
+func (p *Player) GetRoomDescription() (response.RoomDescription, error) {
 	room, err := entities.RequireComponent[*components.Room](p.CurrentRoom)
 	if err != nil {
-		return "", err
+		return response.RoomDescription{}, err
 	}
 
-	formattedTitle, err := utils.FormatText(fmt.Sprintf("{'%s' | bold | red}", p.CurrentRoom.Name), map[string]string{})
-	if err != nil {
-		return "", fmt.Errorf("could not format room '%s' name: %w", p.CurrentRoom.Name, err)
-	}
-
-	b.WriteString(formattedTitle)
-	b.WriteString("\n")
-
-	roomDescription := strings.TrimSpace(p.CurrentRoom.Description)
-	b.WriteString(roomDescription)
-	b.WriteString("\n")
-
+	// Collect child summaries (skip the player entity itself)
+	children := make([]response.ChildSummary, 0)
 	for _, e := range room.GetChildren().GetChildren() {
 		if e == p.Entity {
 			continue
 		}
-
-		description, err := e.GetDescription()
-		if err != nil {
-			return "", err
-		}
-
-		b.WriteString(fmt.Sprintf("%s%s", models.Tab, description))
-		b.WriteString("\n")
+		children = append(children, response.ChildSummary{
+			Name:        e.Name,
+			Description: e.Description,
+		})
 	}
+	slices.SortFunc(children, func(a, b response.ChildSummary) int {
+		return strings.Compare(a.Name, b.Name)
+	})
 
-	b.WriteString("\n")
-	b.WriteString(room.GetExitText())
-	return b.String(), nil
+	// Collect exit directions
+	exits := make([]string, 0, len(room.Exits))
+	for dir := range room.Exits {
+		exits = append(exits, dir)
+	}
+	slices.Sort(exits)
+
+	return response.RoomDescription{
+		Name:        p.CurrentRoom.Name,
+		Description: strings.TrimSpace(p.CurrentRoom.Description),
+		Exits:       exits,
+		Children:    children,
+	}, nil
 }
 
-func (p *Player) Move(direction string) (string, error) {
-	message, err := p.world.MovePlayer(p, direction)
-	return message, err
+func (p *Player) Move(direction string) (response.Response, error) {
+	return p.world.MovePlayer(p, direction)
 }
 
-func (p *Player) Look(alias string) (string, error) {
+func (p *Player) Look(alias string) (response.Response, error) {
 	if alias == "" {
-		message, err := p.GetRoomDescription()
+		room, err := p.GetRoomDescription()
 		if err != nil {
-			return "", fmt.Errorf("look room for player '%s': %w", p.Name, err)
+			return nil, fmt.Errorf("look room for player '%s': %w", p.Name, err)
 		}
-		return message, nil
+		return room, nil
 	}
 
 	matches, err := p.getEntitiesByAlias(alias)
 	if err != nil {
-		return "", fmt.Errorf("get look target for player '%s': %w", p.Name, err)
+		return nil, fmt.Errorf("get look target for player '%s': %w", p.Name, err)
 	}
 
 	if len(matches) == 0 {
-		return fmt.Sprintf("There is no %s for you to look upon.", alias), nil
+		return response.Text{Value: fmt.Sprintf("There is no %s for you to look upon.", alias)}, nil
 	} else if len(matches) == 1 {
-		description, err := matches[0].Entity.GetDescription()
-		return description, err
+		return entityDescription(matches[0].Entity)
 	}
 
 	slots := []entities.AmbiguitySlot{
@@ -173,30 +168,55 @@ func (p *Player) Look(alias string) (string, error) {
 		},
 	}
 
-	return "", &entities.AmbiguityError{
+	return nil, &entities.AmbiguityError{
 		Slots: slots,
 		Execute: func(inputMap map[string]*entities.Entity) (string, error) {
 			t := inputMap[entities.EventRoleTarget.String()]
-
-			description, err := t.GetDescription()
-			return description, err
+			desc, err := t.GetDescription()
+			return desc, err
 		},
 	}
 }
 
-func (p *Player) Inventory() (string, error) {
-	if inventory, ok := entities.GetComponent[*components.Inventory](p.Entity); ok {
-		message, err := inventory.Print()
-		if err != nil {
-			return "", fmt.Errorf("inventory print for player '%s': %w", p.Name, err)
+// entityDescription builds an EntityDescription response from an entity.
+func entityDescription(e *entities.Entity) (response.EntityDescription, error) {
+	var children []response.ChildSummary
+	for _, cwc := range e.GetComponentsWithChildren() {
+		if !cwc.GetChildren().GetRevealed() {
+			continue
 		}
-		return message, nil
+		for _, child := range cwc.GetChildren().GetChildren() {
+			children = append(children, response.ChildSummary{
+				Name:        child.Name,
+				Description: child.Description,
+			})
+		}
 	}
-	return "You couldn't possibly carry anything at all.", nil
+	return response.EntityDescription{
+		Name:        e.Name,
+		Description: e.Description,
+		Children:    children,
+	}, nil
 }
 
-func (p *Player) ActMessage(action, message, noMatchMessage string) (string, error) {
-	return p.sendEventToEntity(p.Entity, &entities.Event{
+func (p *Player) Inventory() (response.InventoryList, error) {
+	if inventory, ok := entities.GetComponent[*components.Inventory](p.Entity); ok {
+		var items []string
+		for _, child := range inventory.GetChildren().GetChildren() {
+			if child.Name != "" {
+				items = append(items, child.Name)
+			}
+		}
+		if items == nil {
+			items = []string{}
+		}
+		return response.InventoryList{Items: items}, nil
+	}
+	return response.InventoryList{Items: []string{}}, nil
+}
+
+func (p *Player) ActMessage(action, message, noMatchMessage string) (response.Text, error) {
+	str, err := p.sendEventToEntity(p.Entity, &entities.Event{
 		Type:         action,
 		Publisher:    p.world,
 		Scheduler:    p.world.GetScheduler(),
@@ -205,18 +225,20 @@ func (p *Player) ActMessage(action, message, noMatchMessage string) (string, err
 		Source:       p.Entity,
 		Message:      message,
 	}, noMatchMessage)
+	return response.Text{Value: str}, err
 }
 
-func (p *Player) ActUponAlias(action, targetAlias, noMatchMessage string) (string, error) {
+func (p *Player) ActUponAlias(action, targetAlias, noMatchMessage string) (response.Text, error) {
 	matches, err := p.getEntitiesByAlias(targetAlias)
 	if err != nil {
-		return "", fmt.Errorf("act upon get target for player '%s': %w", p.Name, err)
+		return response.Text{}, fmt.Errorf("act upon get target for player '%s': %w", p.Name, err)
 	}
 
 	if len(matches) == 0 {
-		return fmt.Sprintf("You wish to %s %s, but that's not here.", action, targetAlias), nil
+		return response.Text{Value: fmt.Sprintf("You wish to %s %s, but that's not here.", action, targetAlias)}, nil
 	} else if len(matches) == 1 {
-		return p.actUponEntity(action, matches[0].Entity, noMatchMessage)
+		str, err := p.actUponEntity(action, matches[0].Entity, noMatchMessage)
+		return response.Text{Value: str}, err
 	}
 
 	slots := []entities.AmbiguitySlot{
@@ -227,7 +249,7 @@ func (p *Player) ActUponAlias(action, targetAlias, noMatchMessage string) (strin
 		},
 	}
 
-	return "", &entities.AmbiguityError{
+	return response.Text{}, &entities.AmbiguityError{
 		Slots: slots,
 		Execute: func(inputMap map[string]*entities.Entity) (string, error) {
 			t := inputMap[entities.EventRoleTarget.String()]
@@ -248,16 +270,17 @@ func (p *Player) actUponEntity(action string, target *entities.Entity, noMatchMe
 	}, noMatchMessage)
 }
 
-func (p *Player) ActUponMessageAlias(action, targetAlias, message, noMatchMessage string) (string, error) {
+func (p *Player) ActUponMessageAlias(action, targetAlias, message, noMatchMessage string) (response.Text, error) {
 	matches, err := p.getEntitiesByAlias(targetAlias)
 	if err != nil {
-		return "", fmt.Errorf("act upon message get target for player '%s': %w", p.Name, err)
+		return response.Text{}, fmt.Errorf("act upon message get target for player '%s': %w", p.Name, err)
 	}
 
 	if len(matches) == 0 {
-		return fmt.Sprintf("You can't %s without %s here", action, targetAlias), nil
+		return response.Text{Value: fmt.Sprintf("You can't %s without %s here", action, targetAlias)}, nil
 	} else if len(matches) == 1 {
-		return p.actUponMessageEntity(action, matches[0].Entity, message, noMatchMessage)
+		str, err := p.actUponMessageEntity(action, matches[0].Entity, message, noMatchMessage)
+		return response.Text{Value: str}, err
 	}
 
 	slots := []entities.AmbiguitySlot{
@@ -268,7 +291,7 @@ func (p *Player) ActUponMessageAlias(action, targetAlias, message, noMatchMessag
 		},
 	}
 
-	return "", &entities.AmbiguityError{
+	return response.Text{}, &entities.AmbiguityError{
 		Slots: slots,
 		Execute: func(inputMap map[string]*entities.Entity) (string, error) {
 			t := inputMap[entities.EventRoleTarget.String()]
@@ -290,17 +313,17 @@ func (p *Player) actUponMessageEntity(action string, target *entities.Entity, me
 	}, noMatchMessage)
 }
 
-func (p *Player) ActUponWithAlias(action, targetAlias, instrumentAlias, noMatchMessage string) (string, error) {
+func (p *Player) ActUponWithAlias(action, targetAlias, instrumentAlias, noMatchMessage string) (response.Text, error) {
 	// Build slots for any ambiguous pieces
 	var slots []entities.AmbiguitySlot
 	var target, instrument *entities.Entity
 
 	targetMatches, err := p.getEntitiesByAlias(targetAlias)
 	if err != nil {
-		return "", fmt.Errorf("act upon with get target for player '%s': %w", p.Name, err)
+		return response.Text{}, fmt.Errorf("act upon with get target for player '%s': %w", p.Name, err)
 	}
 	if len(targetMatches) == 0 {
-		return fmt.Sprintf("There is no %s here.", targetAlias), nil
+		return response.Text{Value: fmt.Sprintf("There is no %s here.", targetAlias)}, nil
 	} else if len(targetMatches) == 1 {
 		target = targetMatches[0].Entity
 	} else {
@@ -313,10 +336,10 @@ func (p *Player) ActUponWithAlias(action, targetAlias, instrumentAlias, noMatchM
 
 	instrumentMatches, err := p.getEntitiesByAlias(instrumentAlias)
 	if err != nil {
-		return "", fmt.Errorf("act upon with get instrument for player '%s': %w", p.Name, err)
+		return response.Text{}, fmt.Errorf("act upon with get instrument for player '%s': %w", p.Name, err)
 	}
 	if len(instrumentMatches) == 0 {
-		return fmt.Sprintf("You don't have %s available.", instrumentAlias), nil
+		return response.Text{Value: fmt.Sprintf("You don't have %s available.", instrumentAlias)}, nil
 	} else if len(instrumentMatches) == 1 {
 		instrument = instrumentMatches[0].Entity
 	} else {
@@ -328,10 +351,11 @@ func (p *Player) ActUponWithAlias(action, targetAlias, instrumentAlias, noMatchM
 	}
 
 	if len(slots) == 0 {
-		return p.actUponWithEntities(action, target, instrument, noMatchMessage)
+		str, err := p.actUponWithEntities(action, target, instrument, noMatchMessage)
+		return response.Text{Value: str}, err
 	}
 
-	return "", &entities.AmbiguityError{
+	return response.Text{}, &entities.AmbiguityError{
 		Slots: slots,
 		Execute: func(inputMap map[string]*entities.Entity) (string, error) {
 			t := target
@@ -368,7 +392,6 @@ func (p *Player) sendEventToEntity(entity *entities.Entity, event *entities.Even
 	}
 
 	if eventful, ok := entities.GetComponent[*components.Eventful](entity); ok {
-
 		match, err := eventful.OnEvent(event)
 		if err != nil {
 			return "", fmt.Errorf("player '%s' send event to '%s' on event error: %w", p.Name, entity.Name, err)
@@ -385,6 +408,11 @@ func (p *Player) sendEventToEntity(entity *entities.Entity, event *entities.Even
 	}
 
 	return message, nil
+}
+
+func (p *Player) Track(alias string) (response.Text, error) {
+	p.trackingAlias = alias
+	return response.Text{Value: fmt.Sprintf(`Rooms with "%s" will now appear as "!" on your map.`, alias)}, nil
 }
 
 func (p *Player) getEntitiesByAlias(alias string) ([]entities.AmbiguityOption, error) {
@@ -416,4 +444,72 @@ func (p *Player) getEntitiesByAlias(alias string) ([]entities.AmbiguityOption, e
 	}
 
 	return eMatches, nil
+}
+
+// renderForTelnet converts a Response to a plain-text string for the telnet client.
+// ANSI formatting is applied here so the wire format stays clean.
+func RenderForTelnet(r response.Response) (string, error) {
+	switch v := r.(type) {
+	case response.RoomDescription:
+		var b strings.Builder
+		title, err := utils.FormatText(fmt.Sprintf("{'%s' | bold | red}", v.Name), map[string]string{})
+		if err != nil {
+			return "", fmt.Errorf("format room title: %w", err)
+		}
+		b.WriteString(title)
+		b.WriteByte('\n')
+		b.WriteString(v.Description)
+		b.WriteByte('\n')
+		for _, child := range v.Children {
+			formatted, err := utils.FormatText(child.Description, map[string]string{})
+			if err != nil {
+				return "", fmt.Errorf("format child description: %w", err)
+			}
+			b.WriteString(fmt.Sprintf("%s%s\n", models.Tab, formatted))
+		}
+		b.WriteByte('\n')
+		if len(v.Exits) > 0 {
+			b.WriteString("Exits: ")
+			b.WriteString(strings.Join(v.Exits, ", "))
+		}
+		return b.String(), nil
+
+	case response.EntityDescription:
+		var b strings.Builder
+		formatted, err := utils.FormatText(v.Description, map[string]string{})
+		if err != nil {
+			return "", fmt.Errorf("format entity description: %w", err)
+		}
+		b.WriteString(fmt.Sprintf("- %s", formatted))
+		for _, child := range v.Children {
+			cf, err := utils.FormatText(child.Description, map[string]string{})
+			if err != nil {
+				return "", fmt.Errorf("format child description: %w", err)
+			}
+			b.WriteString(fmt.Sprintf("\n  - %s", cf))
+		}
+		return b.String(), nil
+
+	case response.InventoryList:
+		if len(v.Items) == 0 {
+			return "You are carrying: []", nil
+		}
+		return fmt.Sprintf("You are carrying: [%s]", strings.Join(v.Items, ", ")), nil
+
+	case response.MapView:
+		var b strings.Builder
+		for _, row := range v.Grid {
+			for _, cell := range row {
+				b.WriteString(cell.Icon)
+			}
+			b.WriteByte('\n')
+		}
+		return b.String(), nil
+
+	case response.Text:
+		return v.Value, nil
+
+	default:
+		return fmt.Sprintf("%+v", v), nil
+	}
 }

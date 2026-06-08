@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"example.com/mud/config"
 	"example.com/mud/dsl"
 	"example.com/mud/parser/commands"
+	"example.com/mud/server"
 	"example.com/mud/world"
 	"example.com/mud/world/entities"
 	"example.com/mud/world/player"
@@ -24,7 +26,6 @@ func handleConnection(conn net.Conn, gameWorld *world.World, cfg *config.Config)
 	var name string
 
 	for {
-
 		if _, err := fmt.Fprint(conn, "What is your name, weary adventurer? "); err != nil {
 			return
 		}
@@ -41,26 +42,27 @@ func handleConnection(conn net.Conn, gameWorld *world.World, cfg *config.Config)
 	}
 
 	inbox := make(chan string, 64)
-	player, err := gameWorld.AddPlayer(name, inbox)
+	p, err := gameWorld.AddPlayer(name, inbox)
 	if err != nil {
 		err := fmt.Errorf("error adding player: %w", err)
-
 		fmt.Println(err.Error())
 		fmt.Fprintln(conn, err.Error())
 		return
 	}
 
-	message, err := player.OpeningMessage()
+	opening, err := p.OpeningMessage()
 	if err != nil {
 		err := fmt.Errorf("error printing opening message: %w", err)
-
 		fmt.Println(err.Error())
 		fmt.Fprintln(conn, err.Error())
-
 		return
-	} else {
-		fmt.Fprintln(conn, message)
 	}
+	rendered, err := player.RenderForTelnet(opening)
+	if err != nil {
+		fmt.Fprintln(conn, err.Error())
+		return
+	}
+	fmt.Fprintln(conn, rendered)
 
 	// start consuming incoming messages
 	go handleConnectionIncoming(conn, inbox)
@@ -68,7 +70,7 @@ func handleConnection(conn net.Conn, gameWorld *world.World, cfg *config.Config)
 	// notify when outgoing messages end
 	done := make(chan struct{})
 	go func() {
-		handleConnectionOutgoing(conn, gameWorld, player, cfg)
+		handleConnectionOutgoing(conn, gameWorld, p, cfg)
 		close(done)
 	}()
 
@@ -85,7 +87,7 @@ func handleConnectionIncoming(conn net.Conn, inbox chan string) {
 	}()
 }
 
-func handleConnectionOutgoing(conn net.Conn, gameWorld *world.World, player *player.Player, cfg *config.Config) {
+func handleConnectionOutgoing(conn net.Conn, gameWorld *world.World, p *player.Player, cfg *config.Config) {
 	scanner := bufio.NewScanner(conn)
 	for {
 		if !scanner.Scan() {
@@ -100,24 +102,24 @@ func handleConnectionOutgoing(conn net.Conn, gameWorld *world.World, player *pla
 		}
 
 		// check if player has pending multi-part messages
-		if p := player.Pending; p != nil {
+		if pending := p.Pending; pending != nil {
 			n, nerr := strconv.Atoi(line)
 			if nerr == nil {
-				slot := p.Ambiguity.Slots[p.StepIndex]
+				slot := pending.Ambiguity.Slots[pending.StepIndex]
 				if n >= 1 && n <= len(slot.Matches) {
-					p.Selected[slot.Role] = n - 1
-					p.StepIndex++
-					if p.StepIndex < len(p.Ambiguity.Slots) {
+					pending.Selected[slot.Role] = n - 1
+					pending.StepIndex++
+					if pending.StepIndex < len(pending.Ambiguity.Slots) {
 						// continue prompting current slot
-						promptCurrentSlot(conn, p)
+						promptCurrentSlot(conn, pending)
 					} else {
-						chosen := make(map[string]*entities.Entity, len(p.Selected))
-						for _, s := range p.Ambiguity.Slots {
-							idx := p.Selected[s.Role]
+						chosen := make(map[string]*entities.Entity, len(pending.Selected))
+						for _, s := range pending.Ambiguity.Slots {
+							idx := pending.Selected[s.Role]
 							chosen[s.Role] = s.Matches[idx].Entity
 						}
-						out, execErr := p.Ambiguity.Execute(chosen)
-						player.Pending = nil
+						out, execErr := pending.Ambiguity.Execute(chosen)
+						p.Pending = nil
 						if execErr != nil {
 							fmt.Fprintln(conn, execErr.Error())
 						} else if out != "" {
@@ -128,43 +130,46 @@ func handleConnectionOutgoing(conn net.Conn, gameWorld *world.World, player *pla
 				continue
 			}
 			// non-number input falls through and removes pending action
-			player.Pending = nil
+			p.Pending = nil
 		}
 
-		if coolDownTime := player.CooldownRemaining(); coolDownTime > 0 {
+		if coolDownTime := p.CooldownRemaining(); coolDownTime > 0 {
 			fmt.Fprintf(conn, "You need to catch your breath. Try again in %.1fs\r\n", coolDownTime.Seconds())
 			continue
 		}
 
-		message, err := gameWorld.Parse(player, line)
+		resp, err := gameWorld.Parse(p, line)
 		if err != nil {
 			var amb *entities.AmbiguityError
 			if errors.As(err, &amb) {
-				player.Pending = &entities.PendingAction{
+				p.Pending = &entities.PendingAction{
 					Ambiguity: amb,
 					StepIndex: 0,
 					Selected:  map[string]int{},
 				}
-				promptCurrentSlot(conn, player.Pending)
+				promptCurrentSlot(conn, p.Pending)
 				continue
 			}
-
 			err := fmt.Errorf("error received: %w", err)
-
 			fmt.Println(err.Error())
 			fmt.Fprintln(conn, err.Error())
-		} else if message != "" {
-			fmt.Fprintln(conn, message)
+		} else if resp != nil {
+			rendered, renderErr := player.RenderForTelnet(resp)
+			if renderErr != nil {
+				fmt.Fprintln(conn, renderErr.Error())
+			} else if rendered != "" {
+				fmt.Fprintln(conn, rendered)
+			}
 		}
 
-		player.StartCooldown(time.Duration(cfg.PlayerRateLimit) * time.Millisecond)
+		p.StartCooldown(time.Duration(cfg.PlayerRateLimit) * time.Millisecond)
 	}
 
 	if err := scanner.Err(); err != nil {
 		fmt.Println("Connection error:", err)
 	}
 
-	gameWorld.DisconnectPlayer(player)
+	gameWorld.DisconnectPlayer(p)
 	fmt.Printf("Connection closed\n")
 }
 
@@ -202,6 +207,15 @@ func main() {
 	}
 
 	gameWorld := world.NewWorld(entityMap, cfg.StartingRoom)
+
+	go func() {
+		addr := fmt.Sprintf(":%d", cfg.WebSocketPort)
+		http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+			server.HandleWS(w, r, gameWorld, cfg)
+		})
+		fmt.Printf("WebSocket server listening on port %d...\n", cfg.WebSocketPort)
+		log.Fatal(http.ListenAndServe(addr, nil))
+	}()
 
 	listener, err := net.Listen("tcp", ":4000")
 	if err != nil {
