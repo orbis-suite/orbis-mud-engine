@@ -10,6 +10,7 @@ import (
 	"example.com/mud/world/entities"
 	"example.com/mud/world/entities/components"
 	"example.com/mud/world/player"
+	"example.com/mud/world/response"
 	"example.com/mud/world/scheduler"
 )
 
@@ -79,10 +80,10 @@ func (w *World) GetScheduler() *scheduler.Scheduler {
 	return w.Scheduler
 }
 
-func (w *World) Parse(p *player.Player, line string) (string, error) {
+func (w *World) Parse(p *player.Player, line string) (response.Response, error) {
 	cmd := parser.Parse(line)
 	if cmd == nil {
-		return "What in the nine hells?", nil
+		return response.Text{Value: "What in the nine hells?"}, nil
 	}
 
 	switch cmd.Kind {
@@ -103,38 +104,33 @@ func (w *World) Parse(p *player.Player, line string) (string, error) {
 	// see if it has target
 	if target := cmd.Params["target"]; target != "" {
 		if instrument := cmd.Params["instrument"]; instrument != "" {
-			response, err := p.ActUponWithAlias(cmd.Kind, target, instrument, cmd.NoMatchMessage)
-			return response, err
+			return p.ActUponWithAlias(cmd.Kind, target, instrument, cmd.NoMatchMessage)
 		} else if message := cmd.Params["message"]; message != "" {
-			response, err := p.ActUponMessageAlias(cmd.Kind, target, message, cmd.NoMatchMessage)
-			return response, err
+			return p.ActUponMessageAlias(cmd.Kind, target, message, cmd.NoMatchMessage)
 		} else {
-			response, err := p.ActUponAlias(cmd.Kind, target, cmd.NoMatchMessage)
-			return response, err
+			return p.ActUponAlias(cmd.Kind, target, cmd.NoMatchMessage)
 		}
 	}
 
 	// see if it has a message
 	if message := cmd.Params["message"]; message != "" {
-		response, err := p.ActMessage(cmd.Kind, message, cmd.NoMatchMessage)
-		return response, err
+		return p.ActMessage(cmd.Kind, message, cmd.NoMatchMessage)
 	}
 
-	return "What the hell are you talking about?", nil
+	return response.Text{Value: "What the hell are you talking about?"}, nil
 }
 
-func (w *World) HelpMessage(command string) string {
+func (w *World) HelpMessage(command string) response.Text {
 	if command == "" {
 		return w.HelpGeneral()
 	}
 
 	canonical, ok := commands.VerbAliases[command]
 	if !ok {
-		return fmt.Sprintf("Unrecognized command: %s", command)
+		return response.Text{Value: fmt.Sprintf("Unrecognized command: %s", command)}
 	}
 
 	var b strings.Builder
-
 	for _, p := range commands.Patterns {
 		if strings.ToLower(p.Kind) == canonical {
 			b.WriteString("- ")
@@ -149,12 +145,11 @@ func (w *World) HelpMessage(command string) string {
 		}
 	}
 
-	return b.String()
+	return response.Text{Value: b.String()}
 }
 
-func (w *World) HelpGeneral() string {
+func (w *World) HelpGeneral() response.Text {
 	var b strings.Builder
-
 	for _, p := range commands.Patterns {
 		b.WriteString("- ")
 		b.WriteString(p.String())
@@ -166,14 +161,13 @@ func (w *World) HelpGeneral() string {
 
 		b.WriteString("\n")
 	}
-
-	return b.String()
+	return response.Text{Value: b.String()}
 }
 
-func (w *World) MovePlayer(p *player.Player, direction string) (string, error) {
+func (w *World) MovePlayer(p *player.Player, direction string) (response.Response, error) {
 	playerRoom, err := entities.RequireComponent[*components.Room](p.CurrentRoom)
 	if err != nil {
-		return "", fmt.Errorf("move for player '%s': %w", p.Name, err)
+		return nil, fmt.Errorf("move for player '%s': %w", p.Name, err)
 	}
 
 	newRoom := w.getNeighboringRoom(playerRoom, direction)
@@ -193,7 +187,7 @@ func (w *World) MovePlayer(p *player.Player, direction string) (string, error) {
 		return p.GetRoomDescription()
 	}
 
-	return "You can't go there.", nil
+	return response.Text{Value: "You can't go there."}, nil
 }
 
 func (w *World) getNeighboringRoom(r *components.Room, direction string) *entities.Entity {
