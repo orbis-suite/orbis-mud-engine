@@ -11,12 +11,11 @@ import (
 	"time"
 
 	"example.com/mud/config"
-	"example.com/mud/lua_runtime"
+	"example.com/mud/dsl"
 	"example.com/mud/parser/commands"
 	"example.com/mud/world"
 	"example.com/mud/world/entities"
 	"example.com/mud/world/player"
-	lua "github.com/yuin/gopher-lua"
 )
 
 func handleConnection(conn net.Conn, gameWorld *world.World, cfg *config.Config) {
@@ -51,11 +50,20 @@ func handleConnection(conn net.Conn, gameWorld *world.World, cfg *config.Config)
 		return
 	}
 
+	message, err := player.OpeningMessage()
+	if err != nil {
+		err := fmt.Errorf("error printing opening message: %w", err)
+
+		fmt.Println(err.Error())
+		fmt.Fprintln(conn, err.Error())
+
+		return
+	} else {
+		fmt.Fprintln(conn, message)
+	}
+
 	// start consuming incoming messages
 	go handleConnectionIncoming(conn, inbox)
-
-	// run init function for player entity
-	player.Init()
 
 	// notify when outgoing messages end
 	done := make(chan struct{})
@@ -175,21 +183,9 @@ func main() {
 		log.Fatalf("failed to load config: %v", err)
 	}
 
-	// lua
-	lr := lua_runtime.NewLuaRuntime()
-	defer lr.Close()
-
-	// enables require/package
-	lua.OpenPackage(lr.L)
-
-	// add ./data to Lua's search path
-	if err := lr.L.DoString(`package.path = package.path .. ';./data/build/?.lua;./data/?/init.lua'`); err != nil {
-		panic(err)
-	}
-
-	entityMap, cmds, err := lr.LoadFile("data/build/src/index.lua")
+	entityMap, cmds, err := dsl.LoadEntitiesFromDirectory("data/")
 	if err != nil {
-		panic(err)
+		log.Fatalf("failed to load DSL entities: %v", err)
 	}
 
 	// validate starting room exists in entity map
@@ -206,10 +202,6 @@ func main() {
 	}
 
 	gameWorld := world.NewWorld(entityMap, cfg.StartingRoom)
-	err = gameWorld.Init()
-	if err != nil {
-		panic(err)
-	}
 
 	listener, err := net.Listen("tcp", ":4000")
 	if err != nil {
