@@ -18,6 +18,7 @@ var sgrToHex = map[string]string{
 	"magenta": "#ff55ff",
 	"cyan":    "#55ffff",
 	"white":   "#ffffff",
+	"gray":    "#4e4e4e",
 }
 
 func (p *Player) MapCommand() (response.Response, error) {
@@ -26,7 +27,7 @@ func (p *Player) MapCommand() (response.Response, error) {
 }
 
 func (p *Player) Map() (response.MapView, error) {
-	coordByRoom, err := assignCoordinates(p.CurrentRoom, p.world, 5)
+	coordByRoom, err := assignCoordinates(p.CurrentRoom, p.world, 8)
 	if err != nil {
 		return response.MapView{}, fmt.Errorf("map: assign coordinates: %w", err)
 	}
@@ -168,17 +169,18 @@ func (p *Player) renderMap(coordByRoom map[*components.Room]coord, currentRoom *
 		gx := (c.X - minX) * 2
 		gy := (c.Y - minY) * 2
 
+		color := sgrToHex[r.MapColor]
+		if color == "" {
+			color = "#c8c4d0"
+		}
+		grid[gy][gx] = response.MapCell{Color: color, Icon: r.MapIcon}
+
 		if r == currentRoom {
-			grid[gy][gx] = response.MapCell{Color: "#ff5555", Icon: "@"}
 			playerX, playerY = gx, gy
-		} else if p.trackingAlias != "" && len(r.GetChildren().GetChildrenByAlias(p.trackingAlias)) > 0 {
-			grid[gy][gx] = response.MapCell{Color: "#ffff55", Icon: "!"}
-		} else {
-			color := sgrToHex[r.MapColor]
-			if color == "" {
-				color = "#c8c4d0"
-			}
-			grid[gy][gx] = response.MapCell{Color: color, Icon: r.MapIcon}
+		}
+
+		if p.trackingAlias != "" && len(r.GetChildren().GetChildrenByAlias(p.trackingAlias)) > 0 {
+			grid[gy][gx].Icon = "tracked-space"
 		}
 
 		for _, roomId := range r.Exits {
@@ -212,4 +214,3 @@ func (p *Player) renderMap(coordByRoom map[*components.Room]coord, currentRoom *
 
 	return grid, playerX, playerY, nil
 }
-

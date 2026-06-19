@@ -45,12 +45,23 @@ func (w *wsConn) writeText(text string) error {
 	return w.writeResp(response.Text{Value: text})
 }
 
-func (w *wsConn) readLine() (string, error) {
+// ClientMessage is the JSON envelope sent by the WebSocket client.
+type ClientMessage struct {
+	Type      string `json:"type"`
+	Text      string `json:"text,omitempty"`
+	Direction string `json:"direction,omitempty"`
+}
+
+func (w *wsConn) readMessage() (*ClientMessage, error) {
 	_, b, err := w.conn.ReadMessage()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return strings.TrimSpace(string(b)), nil
+	var msg ClientMessage
+	if err := json.Unmarshal(b, &msg); err != nil {
+		return nil, err
+	}
+	return &msg, nil
 }
 
 func (w *wsConn) closeWithError(msg string) {
@@ -128,14 +139,8 @@ func HandleWS(w http.ResponseWriter, r *http.Request, gameWorld *world.World, cf
 
 func handleWSOutgoing(conn *wsConn, gameWorld *world.World, p *player.Player, cfg *config.Config, pushRoom func()) {
 	for {
-		line, err := conn.readLine()
+		msg, err := conn.readMessage()
 		if err != nil {
-			break
-		}
-		if line == "" {
-			continue
-		}
-		if strings.ToLower(line) == "quit" {
 			break
 		}
 
@@ -187,45 +192,40 @@ func handleWSOutgoing(conn *wsConn, gameWorld *world.World, p *player.Player, cf
 							}
 						}
 					}
+					continue
 				}
+				p.Pending = nil
+			}
+
+			if cooldown := p.CooldownRemaining(); cooldown > 0 {
+				_ = conn.writeText(fmt.Sprintf("You need to catch your breath. Try again in %.1fs", cooldown.Seconds()))
 				continue
 			}
-			p.Pending = nil
-		}
 
-		if cooldown := p.CooldownRemaining(); cooldown > 0 {
-			_ = conn.writeText(fmt.Sprintf("You need to catch your breath. Try again in %.1fs", cooldown.Seconds()))
-			continue
-		}
-
-		resp, parseErr := gameWorld.Parse(p, line)
-		if parseErr != nil {
-			var amb *entities.AmbiguityError
-			if errors.As(parseErr, &amb) {
-				p.Pending = &entities.PendingAction{
-					Ambiguity: amb,
-					StepIndex: 0,
-					Selected:  map[string]int{},
+			resp, parseErr := gameWorld.Parse(p, line)
+			if parseErr != nil {
+				var amb *entities.AmbiguityError
+				if errors.As(parseErr, &amb) {
+					p.Pending = &entities.PendingAction{
+						Ambiguity: amb,
+						StepIndex: 0,
+						Selected:  map[string]int{},
+					}
+					promptWSSlot(conn, p.Pending)
+					continue
 				}
-				promptWSSlot(conn, p.Pending)
-				continue
+				wrapped := fmt.Sprintf("error received: %v", parseErr)
+				fmt.Println(wrapped)
+				_ = conn.writeText(wrapped)
+			} else if resp != nil {
+				txt, isText := resp.(response.Text)
+				if !isText || txt.Value != "" {
+					_ = conn.writeResp(resp)
+					pushRoom()
+				}
 			}
-			wrapped := fmt.Sprintf("error received: %v", parseErr)
-			fmt.Println(wrapped)
-			_ = conn.writeText(wrapped)
-		} else if resp != nil {
-			// Skip empty text responses — they indicate a handled event with no
-			// direct player feedback (e.g. say/tell broadcasts to the room).
-			txt, isText := resp.(response.Text)
-			if !isText || txt.Value != "" {
-				_ = conn.writeResp(resp)
-				// After any response, push a fresh room description and map so
-				// the Items in Room and Map panels stay in sync.
-				pushRoom()
-			}
+			p.StartCooldown(time.Duration(cfg.PlayerRateLimit) * time.Millisecond)
 		}
-
-		p.StartCooldown(time.Duration(cfg.PlayerRateLimit) * time.Millisecond)
 	}
 }
 
