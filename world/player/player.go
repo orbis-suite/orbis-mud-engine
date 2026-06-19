@@ -391,8 +391,8 @@ func (p *Player) sendEventToEntity(entity *entities.Entity, event *entities.Even
 		return "", fmt.Errorf("player '%s' send event nil entity", p.Name)
 	}
 
-	if eventful, ok := entities.GetComponent[*components.Eventful](entity); ok {
-		match, err := eventful.OnEvent(event)
+	if reactor, ok := entity.GetReactor(); ok {
+		match, err := reactor.OnEvent(event)
 		if err != nil {
 			return "", fmt.Errorf("player '%s' send event to '%s' on event error: %w", p.Name, entity.Name, err)
 		}

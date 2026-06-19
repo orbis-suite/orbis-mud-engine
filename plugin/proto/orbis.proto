@@ -1,0 +1,158 @@
+syntax = "proto3";
+package orbis;
+option go_package = "example.com/mud/plugin/proto";
+
+service OrbisGame {
+    rpc GetManifest(Empty) returns (GameManifest);
+    rpc HandleEvent(EventRequest) returns (ActionList);
+    rpc EventStream(stream EngineUpdate) returns (stream ActionList);
+}
+
+message Empty {}
+
+// ── Manifest ────────────────────────────────────────────────────────────────
+
+message GameManifest {
+    repeated RoomDef    rooms    = 1;
+    repeated EntityDef  entities = 2;
+    repeated CommandDef commands = 3;
+}
+
+message RoomDef {
+    string              id          = 1;
+    string              name        = 2;
+    string              description = 3;
+    string              icon        = 4;
+    string              color       = 5;
+    map<string, string> exits       = 6;
+    repeated string     child_ids   = 7;  // entity IDs that start in this room
+}
+
+message EntityDef {
+    string              id            = 1;
+    string              name          = 2;
+    string              description   = 3;
+    repeated string     aliases       = 4;
+    repeated string     tags          = 5;
+    map<string, string> fields        = 6;  // field_name → JSON value e.g. "42", "\"hello\"", "true"
+    string              container_id  = 7;  // parent container entity ID (for nested entities like box contents)
+    string              container_component = 8; // "Container" or "Inventory"
+    bool                has_inventory = 9;  // entity has an Inventory component
+    bool                has_container = 10; // entity has a Container component
+    string              container_prefix   = 11; // prefix string for container
+    bool                container_revealed = 12; // initial revealed state
+}
+
+message CommandDef {
+    string                  name     = 1;
+    repeated string         aliases  = 2;
+    repeated CommandPattern patterns = 3;
+}
+
+message CommandPattern {
+    string syntax   = 1;
+    string no_match = 2;
+    string help     = 3;
+}
+
+// ── Events ───────────────────────────────────────────────────────────────────
+
+message EventRequest {
+    string         command       = 1;
+    string         target_id     = 2;  // template ID of the reacting entity
+    EntitySnapshot source        = 3;
+    EntitySnapshot target        = 4;
+    EntitySnapshot instrument    = 5;
+    EntitySnapshot room          = 6;
+    string         message       = 7;
+}
+
+message EntitySnapshot {
+    string              template_id = 1;
+    string              name        = 2;
+    string              description = 3;
+    repeated string     aliases     = 4;
+    repeated string     tags        = 5;
+    map<string, string> fields      = 6;  // same encoding as EntityDef.fields
+    repeated ChildRef   children    = 7;  // immediate children across all components
+}
+
+message ChildRef {
+    string          template_id = 1;
+    string          name        = 2;
+    repeated string tags        = 3;
+    string          component   = 4;  // "Room", "Inventory", "Container"
+}
+
+message EngineUpdate {
+    string type = 1;
+}
+
+// ── Actions ───────────────────────────────────────────────────────────────────
+
+message ActionList {
+    repeated Action actions = 1;
+}
+
+message Action {
+    oneof kind {
+        PrintAction    print    = 1;
+        PublishAction  publish  = 2;
+        MoveAction     move     = 3;
+        SetFieldAction set_field = 4;
+        DestroyAction  destroy  = 5;
+        SpawnAction    spawn    = 6;
+        AfterAction    after    = 7;
+        RevealAction   reveal   = 8;
+        HideAction     hide     = 9;
+    }
+}
+
+// role values: "source", "target", "instrument", "room"
+message PrintAction {
+    string role    = 1;
+    string message = 2;
+}
+
+message PublishAction {
+    string          message      = 1;
+    repeated string exclude_roles = 2;  // roles to exclude from broadcast
+}
+
+message MoveAction {
+    string entity_role     = 1;  // which entity to move
+    string dest_role       = 2;  // destination entity
+    string dest_component  = 3;  // "Room", "Inventory", "Container"
+}
+
+message SetFieldAction {
+    string role       = 1;
+    string field      = 2;
+    string value      = 3;  // JSON-encoded
+    string value_type = 4;  // "int", "string", "bool"
+}
+
+message DestroyAction {
+    string role = 1;
+}
+
+message SpawnAction {
+    string template_id    = 1;
+    string dest_role      = 2;
+    string dest_component = 3;
+}
+
+message AfterAction {
+    int64           delay_ms = 1;
+    repeated Action actions  = 2;
+}
+
+message RevealAction {
+    string role      = 1;
+    string component = 2;
+}
+
+message HideAction {
+    string role      = 1;
+    string component = 2;
+}

@@ -11,6 +11,7 @@ type Config struct {
 	StartingRoom    string `yaml:"startingRoom"`
 	PlayerRateLimit int    `yaml:"playerRateLimit"`
 	WebSocketPort   int    `yaml:"websocketPort"`
+	GameBinary      string `yaml:"gameBinary"`
 }
 
 func Load(path string) (*Config, error) {
