@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -12,8 +14,8 @@ import (
 	"time"
 
 	"example.com/mud/config"
-	"example.com/mud/dsl"
 	"example.com/mud/parser/commands"
+	orbisplugin "example.com/mud/plugin"
 	"example.com/mud/server"
 	"example.com/mud/world"
 	"example.com/mud/world/entities"
@@ -182,15 +184,35 @@ func promptCurrentSlot(conn net.Conn, p *entities.PendingAction) {
 }
 
 func main() {
+	debug := flag.Bool("debug", false, "connect to a game binary already running with -debug instead of launching a subprocess")
+	flag.Parse()
+
 	// load configuration file
 	cfg, err := config.Load("config.yaml")
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
 	}
 
-	entityMap, cmds, err := dsl.LoadEntitiesFromDirectory("data/")
+	var gameClient orbisplugin.GameClient
+	var cleanup func()
+	if *debug {
+		gameClient, cleanup, err = orbisplugin.ConnectDebug(30 * time.Second)
+	} else {
+		gameClient, cleanup, err = orbisplugin.Launch(cfg.GameBinary)
+	}
 	if err != nil {
-		log.Fatalf("failed to load DSL entities: %v", err)
+		log.Fatalf("failed to connect to game: %v", err)
+	}
+	defer cleanup()
+
+	manifest, err := gameClient.GetManifest(context.Background())
+	if err != nil {
+		log.Fatalf("failed to get game manifest: %v", err)
+	}
+
+	entityMap, cmds, err := orbisplugin.ManifestToWorld(manifest, gameClient)
+	if err != nil {
+		log.Fatalf("failed to build world from manifest: %v", err)
 	}
 
 	// validate starting room exists in entity map

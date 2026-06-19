@@ -205,6 +205,18 @@ func (e *Entity) GetDescription() (string, error) {
 	return b.String(), nil
 }
 
+// GetReactor returns the first Reactor component found on this entity, if any.
+func (e *Entity) GetReactor() (Reactor, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	for _, c := range e.components {
+		if r, ok := c.(Reactor); ok {
+			return r, true
+		}
+	}
+	return nil, false
+}
+
 func GetComponent[C Component](e *Entity) (C, bool) {
 	var zero C
 	e.mu.RLock()

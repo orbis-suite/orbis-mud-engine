@@ -57,6 +57,12 @@ type Component interface {
 	Copy() Component
 }
 
+// Reactor is implemented by components that handle events.
+type Reactor interface {
+	Component
+	OnEvent(ev *Event) (bool, error)
+}
+
 type ComponentWithChildren interface {
 	AddChild(child *Entity) error
 	RemoveChild(child *Entity)
