@@ -65,9 +65,6 @@ func buildRoom(def *ComponentDef) (entities.Component, error) {
 				return nil, fmt.Errorf("room: icon must be string")
 			}
 
-			if len(value.S) != 1 {
-				return nil, fmt.Errorf("invalid map icon '%s': must be 1 character", value.S)
-			}
 			rm.MapIcon = value.S
 		case "color":
 			if value.K != models.KindString {

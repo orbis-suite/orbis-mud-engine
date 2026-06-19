@@ -1,10 +1,15 @@
 import { useEffect, useRef, useReducer, useState } from 'react'
-import {
-  ThemeProvider, createTheme, CssBaseline, GlobalStyles,
-  Box, Paper, Typography, InputBase, Button,
-  Dialog, DialogTitle, DialogContent, DialogActions,
-  TextField, List, ListItem, ListItemText,
-} from '@mui/material'
+import { ThemeProvider, createTheme, CssBaseline, GlobalStyles, Box } from '@mui/material'
+
+import NameDialog from './components/NameDialog'
+import InventoryDialog from './components/InventoryDialog'
+import RoomPanel from './components/RoomPanel'
+import MapPanel from './components/MapPanel'
+import MainLog from './components/MainLog'
+import ItemsPanel from './components/ItemsPanel'
+import InputBar from './components/InputBar'
+
+import type { State, Action, WSMessage, ClientMessage, Direction, RoomContent, InventoryContent, TextContent, EntityContent, MapData } from './types'
 
 // ── Theme ─────────────────────────────────────────────────────────────────────
 
@@ -35,47 +40,7 @@ const theme = createTheme({
   },
 })
 
-// ── Wire types ────────────────────────────────────────────────────────────────
-
-interface RoomContent {
-  name: string
-  description: string
-  exits: string[]
-  children: { name: string; description: string }[]
-}
-
-interface TextContent { text: string }
-interface EntityContent { name: string; description: string }
-interface InventoryContent { items: string[] }
-interface MapCell { color: string; icon: string }
-interface MapData { grid: MapCell[][]; playerX: number; playerY: number }
-
-interface WSMessage {
-  panel: 'main' | 'map' | 'inventory' | 'room'
-  content: unknown
-}
-
-// ── State ─────────────────────────────────────────────────────────────────────
-
-type Phase = 'modal' | 'connecting' | 'playing'
-
-interface State {
-  phase: Phase
-  nameError: string
-  lines: string[]
-  room: RoomContent | null
-  map: MapData | null
-  inventoryOpen: boolean
-  inventory: string[]
-}
-
-type Action =
-  | { type: 'connecting' }
-  | { type: 'disconnected' }
-  | { type: 'name_error'; error: string }
-  | { type: 'message'; msg: WSMessage }
-  | { type: 'close_inventory' }
-  | { type: 'clear_inventory' }
+// ── Reducer ───────────────────────────────────────────────────────────────────
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
@@ -122,19 +87,7 @@ function validateName(name: string): string {
   return ''
 }
 
-function PanelLabel({ children }: { children: string }) {
-  return (
-    <Typography variant="caption" sx={{
-      px: 1, py: 0.5, display: 'block', flexShrink: 0,
-      color: 'text.secondary', textTransform: 'uppercase', letterSpacing: '0.08em',
-      borderBottom: 1, borderColor: 'divider',
-    }}>
-      {children}
-    </Typography>
-  )
-}
-
-// ── Component ─────────────────────────────────────────────────────────────────
+// ── App ───────────────────────────────────────────────────────────────────────
 
 export default function App() {
   const [state, dispatch] = useReducer(reducer, INITIAL)
@@ -147,6 +100,19 @@ export default function App() {
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
   }, [state.lines])
+
+  useEffect(() => {
+    const dirMap: Partial<Record<string, Direction>> = {
+      w: 'north', s: 'south', a: 'west', d: 'east',
+    }
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (document.activeElement === cmdRef.current) return
+      const direction = dirMap[e.key.toLowerCase()]
+      if (direction) sendMessage({ type: 'move', direction })
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
 
   function connect(name: string) {
     const err = validateName(name)
@@ -174,10 +140,15 @@ export default function App() {
     }
   }
 
+  function sendMessage(msg: ClientMessage) {
+    if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return
+    ws.current.send(JSON.stringify(msg))
+  }
+
   function send() {
     const line = cmdInput.trim()
-    if (!line || !ws.current || ws.current.readyState !== WebSocket.OPEN) return
-    ws.current.send(line)
+    if (!line) return
+    sendMessage({ type: 'text', text: line })
     cmdRef.current?.select()
   }
 
@@ -188,67 +159,28 @@ export default function App() {
       <CssBaseline />
       <GlobalStyles styles={{ 'html, body, #root': { height: '100%' } }} />
 
-      {/* ── Name dialog ────────────────────────────────────────────────── */}
-      <Dialog open={state.phase !== 'playing'}>
-        <Box component="form" onSubmit={(e) => { e.preventDefault(); connect(nameInput.trim()) }}>
-          <DialogTitle>Enter the World</DialogTitle>
-          <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '8px !important', width: 300 }}>
-            <Typography variant="body2" color="text.secondary">
-              What is your name, weary adventurer?
-            </Typography>
-            <TextField
-              value={nameInput}
-              onChange={(e) => setNameInput(e.target.value)}
-              disabled={state.phase === 'connecting'}
-              autoFocus
-              size="small"
-              slotProps={{ htmlInput: { spellCheck: false, autoComplete: 'off', maxLength: 20 } }}
-            />
-            {state.nameError && (
-              <Typography variant="caption" color="error">{state.nameError}</Typography>
-            )}
-          </DialogContent>
-          <DialogActions>
-            <Button type="submit" disabled={state.phase === 'connecting'} fullWidth variant="outlined">
-              {state.phase === 'connecting' ? 'Connecting…' : 'Enter'}
-            </Button>
-          </DialogActions>
-        </Box>
-      </Dialog>
+      <NameDialog
+        phase={state.phase}
+        nameInput={nameInput}
+        setNameInput={setNameInput}
+        nameError={state.nameError}
+        onConnect={connect}
+      />
 
-      {/* ── Inventory dialog ────────────────────────────────────────────── */}
-      <Dialog
+      <InventoryDialog
         open={inventoryOpen}
+        inventory={inventory}
         onClose={() => dispatch({ type: 'close_inventory' })}
-        slotProps={{ transition: { onExited: () => dispatch({ type: 'clear_inventory' }) } }}
-      >
-        <DialogTitle>Inventory</DialogTitle>
-        <DialogContent sx={{ minWidth: 260 }}>
-          {inventory.length > 0 ? (
-            <List dense disablePadding>
-              {inventory.map((item, i) => (
-                <ListItem key={i} disableGutters>
-                  <ListItemText primary={item} />
-                </ListItem>
-              ))}
-            </List>
-          ) : (
-            <Typography color="text.secondary">You are carrying nothing.</Typography>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => dispatch({ type: 'close_inventory' })} variant="outlined">Close</Button>
-        </DialogActions>
-      </Dialog>
+        onExited={() => dispatch({ type: 'clear_inventory' })}
+      />
 
-      {/* ── Game layout ─────────────────────────────────────────────────── */}
       {state.phase === 'playing' && (
         <Box
           onKeyDown={(e) => { if (e.key === 'Escape') dispatch({ type: 'close_inventory' }) }}
           sx={{
             height: '100vh',
             display: 'grid',
-            gridTemplateColumns: '1fr 1fr',
+            gridTemplateColumns: '3fr 1fr',
             gridTemplateRows: '1fr 2fr 42px',
             gridTemplateAreas: '"room map" "main items" "input input"',
             gap: '4px',
@@ -256,95 +188,11 @@ export default function App() {
             bgcolor: 'background.default',
           }}
         >
-          {/* Room */}
-          <Paper sx={{ gridArea: 'room', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-            <PanelLabel>Room</PanelLabel>
-            <Box sx={{ p: '10px 12px', overflowY: 'auto', flex: 1 }}>
-              {room ? (
-                <>
-                  <Typography sx={{ fontSize: 15, color: '#d4a8ff', letterSpacing: '0.03em', mb: 0.75 }}>
-                    {room.name}
-                  </Typography>
-                  <Typography variant="body2" sx={{ color: '#a89db8', whiteSpace: 'pre-wrap', mb: 0.75 }}>
-                    {room.description}
-                  </Typography>
-                  {room.exits.length > 0 && (
-                    <Typography variant="caption" color="text.secondary">
-                      Exits: {room.exits.join(', ')}
-                    </Typography>
-                  )}
-                </>
-              ) : <Typography color="text.secondary">—</Typography>}
-            </Box>
-          </Paper>
-
-          {/* Map */}
-          <Paper sx={{ gridArea: 'map', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-            <PanelLabel>Map</PanelLabel>
-            <Box sx={{ p: '10px 12px', overflowY: 'auto', flex: 1, fontFamily: 'monospace', lineHeight: 1.4, whiteSpace: 'pre' }}>
-              {map ? map.grid.map((row, y) => (
-                <Box key={y} component="div">
-                  {row.map((cell, x) => (
-                    <Box key={x} component="span" sx={{ color: cell.color || 'inherit' }}>{cell.icon}</Box>
-                  ))}
-                </Box>
-              )) : <Typography color="text.secondary">—</Typography>}
-            </Box>
-          </Paper>
-
-          {/* Main log */}
-          <Paper ref={logRef} sx={{ gridArea: 'main', display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
-            <PanelLabel>Main</PanelLabel>
-            <Box sx={{ p: '8px 12px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
-              {lines.map((line, i) => (
-                <Box key={i} sx={{
-                  lineHeight: 1.6,
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                  color: '#e1ddeb',
-                  bgcolor: i % 2 === 0 ? 'transparent' : '#1c1a24',
-                }}>
-                  {line}
-                </Box>
-              ))}
-            </Box>
-          </Paper>
-
-          {/* Items in room */}
-          <Paper sx={{ gridArea: 'items', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-            <PanelLabel>Items in Room</PanelLabel>
-            <Box sx={{ p: '10px 12px', overflowY: 'auto', flex: 1 }}>
-              {room && room.children.length > 0 ? (
-                <List dense disablePadding>
-                  {room.children.map((child, i) => (
-                    <ListItem key={i} disableGutters sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', mb: 0.5 }}>
-                      <Typography variant="body2">{child.name}</Typography>
-                      {child.description && (
-                        <Typography variant="caption" color="text.secondary">{child.description}</Typography>
-                      )}
-                    </ListItem>
-                  ))}
-                </List>
-              ) : <Typography color="text.secondary">Nothing here.</Typography>}
-            </Box>
-          </Paper>
-
-          {/* Input bar */}
-          <Paper sx={{ gridArea: 'input', display: 'flex', alignItems: 'center', gap: 1, px: 1 }}>
-            <Typography sx={{ color: 'primary.main', flexShrink: 0 }}>{'>'}</Typography>
-            <InputBase
-              inputRef={cmdRef}
-              value={cmdInput}
-              onChange={(e) => setCmdInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') send() }}
-              autoFocus
-              sx={{ flex: 1, color: 'text.primary', fontFamily: 'inherit', fontSize: 'inherit' }}
-              inputProps={{ spellCheck: false, autoComplete: 'off' }}
-            />
-            <Button onClick={send} variant="outlined" size="small" sx={{ flexShrink: 0, fontSize: 12 }}>
-              Send
-            </Button>
-          </Paper>
+          <RoomPanel room={room} onMove={(dir) => sendMessage({ type: 'move', direction: dir })} />
+          <MapPanel map={map} />
+          <MainLog ref={logRef} lines={lines} />
+          <ItemsPanel room={room} />
+          <InputBar cmdInput={cmdInput} setCmdInput={setCmdInput} cmdRef={cmdRef} onSend={send} />
         </Box>
       )}
     </ThemeProvider>
