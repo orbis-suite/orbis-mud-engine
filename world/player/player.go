@@ -146,7 +146,7 @@ func (p *Player) Look(alias string) (response.Response, error) {
 		if err != nil {
 			return nil, fmt.Errorf("look room for player '%s': %w", p.Name, err)
 		}
-		return room, nil
+		return response.Text{Value: room.String()}, nil
 	}
 
 	matches, err := p.getEntitiesByAlias(alias)

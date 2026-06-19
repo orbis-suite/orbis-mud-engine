@@ -6,9 +6,10 @@ import pb "example.com/mud/plugin/proto"
 type Command = string
 
 type Manifest struct {
-	Rooms    []*RoomDef
-	Entities []*EntityDef
-	Commands []*CommandDef
+	StartingRoom string
+	Rooms        []*RoomDef
+	Entities     []*EntityDef
+	Commands     []*CommandDef
 }
 
 type RoomDef struct {
@@ -65,7 +66,12 @@ func (m *Manifest) toProto() *pb.GameManifest {
 		cmds = append(cmds, c.toProto())
 	}
 
-	return &pb.GameManifest{Rooms: rooms, Entities: ents, Commands: cmds}
+	return &pb.GameManifest{
+		StartingRoom: m.StartingRoom,
+		Rooms:        rooms,
+		Entities:     ents,
+		Commands:     cmds,
+	}
 }
 
 func (r *RoomDef) toProto() *pb.RoomDef {

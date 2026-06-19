@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+
 	"example.com/mud/game/commands"
 	"example.com/mud/game/entities"
 	"example.com/mud/game/rooms"
@@ -11,10 +13,15 @@ import (
 type Game struct{}
 
 func (g *Game) GetManifest() *sdk.Manifest {
+	worldRooms := rooms.GenerateWorld()
+	startingRoom := worldRooms[0].ID
+	fmt.Println(startingRoom)
+
 	return &sdk.Manifest{
-		Rooms:    rooms.All(),
-		Entities: entities.All(),
-		Commands: commands.All(),
+		StartingRoom: startingRoom,
+		Rooms:        worldRooms,
+		Entities:     entities.All(),
+		Commands:     commands.All(),
 	}
 }
 

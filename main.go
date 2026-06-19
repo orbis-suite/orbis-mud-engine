@@ -196,7 +196,7 @@ func main() {
 	var gameClient orbisplugin.GameClient
 	var cleanup func()
 	if *debug {
-		gameClient, cleanup, err = orbisplugin.ConnectDebug(30 * time.Second)
+		gameClient, cleanup, err = orbisplugin.ConnectDebug(5 * time.Second)
 	} else {
 		gameClient, cleanup, err = orbisplugin.Launch(cfg.GameBinary)
 	}
@@ -216,8 +216,8 @@ func main() {
 	}
 
 	// validate starting room exists in entity map
-	if _, ok := entityMap[cfg.StartingRoom]; !ok {
-		log.Fatalf("room '%s' does not exist in world.", cfg.StartingRoom)
+	if _, ok := entityMap[manifest.GetStartingRoom()]; !ok {
+		log.Fatalf("room '%s' does not exist in world.", manifest.GetStartingRoom())
 	}
 
 	if err := commands.RegisterBuiltInCommands(); err != nil {
@@ -228,7 +228,7 @@ func main() {
 		log.Fatalf("failed to register DSL commands: %v", err)
 	}
 
-	gameWorld := world.NewWorld(entityMap, cfg.StartingRoom)
+	gameWorld := world.NewWorld(entityMap, manifest.GetStartingRoom())
 
 	go func() {
 		addr := fmt.Sprintf(":%d", cfg.WebSocketPort)

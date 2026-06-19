@@ -1,4 +1,4 @@
-.PHONY: test proto engine game run
+.PHONY: test proto engine game run clean
 
 test:
 	go test ./...
@@ -16,3 +16,6 @@ game:
 
 run: proto engine game
 	./orbis
+
+clean:
+	rm -f orbis game-binary

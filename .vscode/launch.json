@@ -1,15 +1,32 @@
 {
   "version": "0.2.0",
   "configurations": [
-    
-
     {
-      "name": "Launch Go Program",
+      "name": "Game",
       "type": "go",
       "request": "launch",
       "mode": "debug",
-      "program": "main.go",
+      "program": "${workspaceFolder}/game",
+      "args": ["-debug"],
+      "cwd": "${workspaceFolder}",
       "console": "integratedTerminal"
+    },
+    {
+      "name": "Engine",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "program": "${workspaceFolder}",
+      "args": ["-debug"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Game + Engine",
+      "configurations": ["Game", "Engine"],
+      "stopAll": true
     }
   ]
 }

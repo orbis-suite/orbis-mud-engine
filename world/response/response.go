@@ -1,6 +1,9 @@
 package response
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 const (
 	PanelMain      = "main"
@@ -12,7 +15,6 @@ const (
 // Response is the result type of world.Parse.
 type Response interface {
 	Panel() string
-	isResponse()
 }
 
 // WSMessage is the JSON envelope sent to WebSocket clients.
@@ -34,10 +36,14 @@ type RoomDescription struct {
 	Description string         `json:"description"`
 	Exits       []string       `json:"exits"`
 	Children    []ChildSummary `json:"children"`
+	ToPanel     string         `json:"panel"`
 }
 
 func (RoomDescription) Panel() string { return PanelRoom }
-func (RoomDescription) isResponse()   {}
+
+func (r *RoomDescription) String() string {
+	return fmt.Sprintf("%s: %s", r.Name, r.Description)
+}
 
 // EntityDescription is returned by look <target>.
 type EntityDescription struct {
@@ -47,7 +53,6 @@ type EntityDescription struct {
 }
 
 func (EntityDescription) Panel() string { return PanelMain }
-func (EntityDescription) isResponse()   {}
 
 // InventoryList is returned by the inventory command.
 type InventoryList struct {
@@ -55,7 +60,6 @@ type InventoryList struct {
 }
 
 func (InventoryList) Panel() string { return PanelInventory }
-func (InventoryList) isResponse()   {}
 
 // MapCell is one cell in the map grid.
 type MapCell struct {
@@ -73,7 +77,6 @@ type MapView struct {
 }
 
 func (MapView) Panel() string { return PanelMap }
-func (MapView) isResponse()   {}
 
 // Text is the fallback for all plain-text responses: help, track, game actions, errors.
 type Text struct {
@@ -81,4 +84,3 @@ type Text struct {
 }
 
 func (Text) Panel() string { return PanelMain }
-func (Text) isResponse()   {}

@@ -139,28 +139,52 @@ func handleWSOutgoing(conn *wsConn, gameWorld *world.World, p *player.Player, cf
 			break
 		}
 
-		// pending ambiguity resolution
-		if pending := p.Pending; pending != nil {
-			n, nerr := strconv.Atoi(line)
-			if nerr == nil {
-				slot := pending.Ambiguity.Slots[pending.StepIndex]
-				if n >= 1 && n <= len(slot.Matches) {
-					pending.Selected[slot.Role] = n - 1
-					pending.StepIndex++
-					if pending.StepIndex < len(pending.Ambiguity.Slots) {
-						promptWSSlot(conn, pending)
-					} else {
-						chosen := make(map[string]*entities.Entity, len(pending.Selected))
-						for _, s := range pending.Ambiguity.Slots {
-							idx := pending.Selected[s.Role]
-							chosen[s.Role] = s.Matches[idx].Entity
-						}
-						out, execErr := pending.Ambiguity.Execute(chosen)
-						p.Pending = nil
-						if execErr != nil {
-							_ = conn.writeText(execErr.Error())
-						} else if out != "" {
-							_ = conn.writeText(out)
+		switch msg.Type {
+		case "move":
+			if cooldown := p.CooldownRemaining(); cooldown > 0 {
+				_ = conn.writeText(fmt.Sprintf("You need to catch your breath. Try again in %.1fs", cooldown.Seconds()))
+				continue
+			}
+			resp, moveErr := p.Move(msg.Direction)
+			if moveErr != nil {
+				_ = conn.writeText(fmt.Sprintf("error received: %v", moveErr))
+			} else if resp != nil {
+				pushRoom()
+			}
+			p.StartCooldown(time.Duration(cfg.PlayerRateLimit) * time.Millisecond)
+
+		case "text":
+			line := strings.TrimSpace(msg.Text)
+			if line == "" {
+				continue
+			}
+			if strings.ToLower(line) == "quit" {
+				return
+			}
+
+			// pending ambiguity resolution
+			if pending := p.Pending; pending != nil {
+				n, nerr := strconv.Atoi(line)
+				if nerr == nil {
+					slot := pending.Ambiguity.Slots[pending.StepIndex]
+					if n >= 1 && n <= len(slot.Matches) {
+						pending.Selected[slot.Role] = n - 1
+						pending.StepIndex++
+						if pending.StepIndex < len(pending.Ambiguity.Slots) {
+							promptWSSlot(conn, pending)
+						} else {
+							chosen := make(map[string]*entities.Entity, len(pending.Selected))
+							for _, s := range pending.Ambiguity.Slots {
+								idx := pending.Selected[s.Role]
+								chosen[s.Role] = s.Matches[idx].Entity
+							}
+							out, execErr := pending.Ambiguity.Execute(chosen)
+							p.Pending = nil
+							if execErr != nil {
+								_ = conn.writeText(execErr.Error())
+							} else if out != "" {
+								_ = conn.writeText(out)
+							}
 						}
 					}
 				}

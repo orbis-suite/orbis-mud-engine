@@ -1,4 +1,3 @@
-startingRoom: "Hut"
-playerRateLimit: 200
+playerRateLimit: 1
 websocketPort: 4001
 gameBinary: "./game-binary"

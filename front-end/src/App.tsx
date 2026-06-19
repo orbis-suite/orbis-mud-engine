@@ -1,39 +1,74 @@
 import { useEffect, useRef, useReducer, useState } from 'react'
-import {
-  ThemeProvider, createTheme, CssBaseline, GlobalStyles,
-  Box, Paper, Typography, InputBase, Button,
-  Dialog, DialogTitle, DialogContent, DialogActions,
-  TextField, List, ListItem, ListItemText,
-} from '@mui/material'
+import { ThemeProvider, createTheme, CssBaseline, GlobalStyles, Box, IconButton, Tooltip } from '@mui/material'
+
+import NameDialog from './components/NameDialog'
+import InventoryDialog from './components/InventoryDialog'
+import RoomPanel from './components/RoomPanel'
+import MapPanel from './components/MapPanel'
+import MainLog from './components/MainLog'
+import ItemsPanel from './components/ItemsPanel'
+import InputBar from './components/InputBar'
+
+import type { State, Action, WSMessage, ClientMessage, Direction, RoomContent, InventoryContent, TextContent, EntityContent, MapData } from './types'
 
 // ── Theme ─────────────────────────────────────────────────────────────────────
 
-const theme = createTheme({
-  palette: {
-    mode: 'dark',
-    background: { default: '#0d0d0f', paper: '#16141c' },
-    primary: { main: '#7c5cbf' },
-    text: { primary: '#c8c4d0', secondary: '#6b5f80' },
-    divider: '#2a2733',
-    error: { main: '#c06060' },
-  },
-  typography: {
-    fontFamily: "ui-monospace, Consolas, 'Courier New', monospace",
-    fontSize: 14,
-  },
-  components: {
-    MuiPaper: {
-      defaultProps: { elevation: 0 },
-      styleOverrides: { root: { border: '1px solid #2a2733' } },
+function buildTheme(dark: boolean) {
+  return createTheme({
+    palette: {
+      mode: dark ? 'dark' : 'light',
+      background: dark
+        ? { default: '#0d0d0f', paper: '#16141c' }
+        : { default: '#f5f4f7', paper: '#ffffff' },
+      primary: { main: dark ? '#7c5cbf' : '#6b48b0' },
+      text: dark
+        ? { primary: '#c8c4d0', secondary: '#6b5f80' }
+        : { primary: '#1a1625', secondary: '#5a5070' },
+      divider: dark ? '#2a2733' : '#dddae5',
+      error: { main: dark ? '#c06060' : '#b04040' },
     },
-    MuiDialog: {
-      styleOverrides: { paper: { border: '1px solid #2a2733' } },
+    typography: {
+      fontFamily: "ui-monospace, Consolas, 'Courier New', monospace",
+      fontSize: 14,
     },
-    MuiButton: {
-      styleOverrides: { root: { fontFamily: "ui-monospace, Consolas, 'Courier New', monospace", textTransform: 'none' } },
+    components: {
+      MuiPaper: {
+        defaultProps: { elevation: 0 },
+        styleOverrides: { root: { border: `1px solid ${dark ? '#2a2733' : '#dddae5'}` } },
+      },
+      MuiDialog: {
+        styleOverrides: { paper: { border: `1px solid ${dark ? '#2a2733' : '#dddae5'}` } },
+      },
+      MuiButton: {
+        styleOverrides: { root: { fontFamily: "ui-monospace, Consolas, 'Courier New', monospace", textTransform: 'none' } },
+      },
     },
-  },
-})
+  })
+}
+
+function SunIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+      <circle cx="12" cy="12" r="5" />
+      <line x1="12" y1="1" x2="12" y2="3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <line x1="12" y1="21" x2="12" y2="23" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <line x1="1" y1="12" x2="3" y2="12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <line x1="21" y1="12" x2="23" y2="12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function MoonIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+    </svg>
+  )
+}
 
 // ── Wire types ────────────────────────────────────────────────────────────────
 
@@ -140,9 +175,11 @@ export default function App() {
   const [state, dispatch] = useReducer(reducer, INITIAL)
   const [nameInput, setNameInput] = useState('')
   const [cmdInput, setCmdInput] = useState('')
+  const [darkMode, setDarkMode] = useState(true)
   const ws = useRef<WebSocket | null>(null)
   const logRef = useRef<HTMLDivElement>(null)
   const cmdRef = useRef<HTMLInputElement>(null)
+  const theme = buildTheme(darkMode)
 
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
@@ -188,33 +225,33 @@ export default function App() {
       <CssBaseline />
       <GlobalStyles styles={{ 'html, body, #root': { height: '100%' } }} />
 
-      {/* ── Name dialog ────────────────────────────────────────────────── */}
-      <Dialog open={state.phase !== 'playing'}>
-        <Box component="form" onSubmit={(e) => { e.preventDefault(); connect(nameInput.trim()) }}>
-          <DialogTitle>Enter the World</DialogTitle>
-          <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '8px !important', width: 300 }}>
-            <Typography variant="body2" color="text.secondary">
-              What is your name, weary adventurer?
-            </Typography>
-            <TextField
-              value={nameInput}
-              onChange={(e) => setNameInput(e.target.value)}
-              disabled={state.phase === 'connecting'}
-              autoFocus
-              size="small"
-              slotProps={{ htmlInput: { spellCheck: false, autoComplete: 'off', maxLength: 20 } }}
-            />
-            {state.nameError && (
-              <Typography variant="caption" color="error">{state.nameError}</Typography>
-            )}
-          </DialogContent>
-          <DialogActions>
-            <Button type="submit" disabled={state.phase === 'connecting'} fullWidth variant="outlined">
-              {state.phase === 'connecting' ? 'Connecting…' : 'Enter'}
-            </Button>
-          </DialogActions>
-        </Box>
-      </Dialog>
+      <Tooltip title={darkMode ? 'Switch to light mode' : 'Switch to dark mode'} placement="left">
+        <IconButton
+          onClick={() => setDarkMode(d => !d)}
+          size="small"
+          sx={{
+            position: 'fixed',
+            bottom: 16,
+            right: 16,
+            zIndex: 9999,
+            bgcolor: 'background.paper',
+            border: '1px solid',
+            borderColor: 'divider',
+            color: 'text.secondary',
+            '&:hover': { color: 'primary.main', borderColor: 'primary.main' },
+          }}
+        >
+          {darkMode ? <SunIcon /> : <MoonIcon />}
+        </IconButton>
+      </Tooltip>
+
+      <NameDialog
+        phase={state.phase}
+        nameInput={nameInput}
+        setNameInput={setNameInput}
+        nameError={state.nameError}
+        onConnect={connect}
+      />
 
       {/* ── Inventory dialog ────────────────────────────────────────────── */}
       <Dialog

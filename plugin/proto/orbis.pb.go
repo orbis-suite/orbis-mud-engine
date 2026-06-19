@@ -59,9 +59,10 @@ func (*Empty) Descriptor() ([]byte, []int) {
 
 type GameManifest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Rooms         []*RoomDef             `protobuf:"bytes,1,rep,name=rooms,proto3" json:"rooms,omitempty"`
-	Entities      []*EntityDef           `protobuf:"bytes,2,rep,name=entities,proto3" json:"entities,omitempty"`
-	Commands      []*CommandDef          `protobuf:"bytes,3,rep,name=commands,proto3" json:"commands,omitempty"`
+	StartingRoom  string                 `protobuf:"bytes,1,opt,name=starting_room,json=startingRoom,proto3" json:"starting_room,omitempty"`
+	Rooms         []*RoomDef             `protobuf:"bytes,2,rep,name=rooms,proto3" json:"rooms,omitempty"`
+	Entities      []*EntityDef           `protobuf:"bytes,3,rep,name=entities,proto3" json:"entities,omitempty"`
+	Commands      []*CommandDef          `protobuf:"bytes,4,rep,name=commands,proto3" json:"commands,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -94,6 +95,13 @@ func (x *GameManifest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use GameManifest.ProtoReflect.Descriptor instead.
 func (*GameManifest) Descriptor() ([]byte, []int) {
 	return file_plugin_proto_orbis_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *GameManifest) GetStartingRoom() string {
+	if x != nil {
+		return x.StartingRoom
+	}
+	return ""
 }
 
 func (x *GameManifest) GetRooms() []*RoomDef {
@@ -1493,11 +1501,12 @@ var File_plugin_proto_orbis_proto protoreflect.FileDescriptor
 const file_plugin_proto_orbis_proto_rawDesc = "" +
 	"\n" +
 	"\x18plugin/proto/orbis.proto\x12\x05orbis\"\a\n" +
-	"\x05Empty\"\x91\x01\n" +
-	"\fGameManifest\x12$\n" +
-	"\x05rooms\x18\x01 \x03(\v2\x0e.orbis.RoomDefR\x05rooms\x12,\n" +
-	"\bentities\x18\x02 \x03(\v2\x10.orbis.EntityDefR\bentities\x12-\n" +
-	"\bcommands\x18\x03 \x03(\v2\x11.orbis.CommandDefR\bcommands\"\x81\x02\n" +
+	"\x05Empty\"\xb6\x01\n" +
+	"\fGameManifest\x12#\n" +
+	"\rstarting_room\x18\x01 \x01(\tR\fstartingRoom\x12$\n" +
+	"\x05rooms\x18\x02 \x03(\v2\x0e.orbis.RoomDefR\x05rooms\x12,\n" +
+	"\bentities\x18\x03 \x03(\v2\x10.orbis.EntityDefR\bentities\x12-\n" +
+	"\bcommands\x18\x04 \x03(\v2\x11.orbis.CommandDefR\bcommands\"\x81\x02\n" +
 	"\aRoomDef\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +

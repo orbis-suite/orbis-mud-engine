@@ -13,9 +13,11 @@ message Empty {}
 // ── Manifest ────────────────────────────────────────────────────────────────
 
 message GameManifest {
-    repeated RoomDef    rooms    = 1;
-    repeated EntityDef  entities = 2;
-    repeated CommandDef commands = 3;
+    string starting_room = 1;
+
+    repeated RoomDef    rooms    = 2;
+    repeated EntityDef  entities = 3;
+    repeated CommandDef commands = 4;
 }
 
 message RoomDef {

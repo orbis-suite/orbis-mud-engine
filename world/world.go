@@ -96,7 +96,7 @@ func (w *World) Parse(p *player.Player, line string) (response.Response, error) 
 	case "inventory":
 		return p.Inventory()
 	case "map":
-		return p.Map()
+		return p.MapCommand()
 	case "track":
 		return p.Track(cmd.Params["target"])
 	}

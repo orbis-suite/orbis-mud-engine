@@ -20,6 +20,11 @@ var sgrToHex = map[string]string{
 	"white":   "#ffffff",
 }
 
+func (p *Player) MapCommand() (response.Response, error) {
+	// We don't support the "map" command directly anymore, but may want to eventually.
+	return response.Text{Value: "You gaze upon your surroundings and see what's in the map panel."}, nil
+}
+
 func (p *Player) Map() (response.MapView, error) {
 	coordByRoom, err := assignCoordinates(p.CurrentRoom, p.world, 5)
 	if err != nil {
